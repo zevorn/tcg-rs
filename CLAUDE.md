@@ -135,6 +135,22 @@ trait HostCodeGen {
 
 参考：`~/qemu/tcg/<arch>/tcg-target.c.inc` 和 `~/qemu/tcg/<arch>/tcg-target.h`。
 
+### x86-64 后端实现
+
+x86-64 后端位于 `tcg-backend/src/x86_64/`，包含三个文件：
+
+| 文件 | 职责 |
+|------|------|
+| `regs.rs` | 寄存器定义、ABI 常量（TCG_AREG0=RBP、栈帧布局） |
+| `emitter.rs` | 指令编码器：前缀标志、操作码常量、核心编码函数、所有 GPR 指令发射器 |
+| `mod.rs` | 模块导出 |
+
+**编码架构**：采用 QEMU 风格的 `u32` 操作码常量，高位编码前缀标志（`P_EXT`、`P_REXW` 等），通过 `emit_opc` 统一处理 REX 前缀和转义字节。详见 [`docs/x86_64-backend.md`](docs/x86_64-backend.md)。
+
+**已实现的指令类别**：算术（ADD/SUB/AND/OR/XOR/CMP/ADC/SBB）、移位（SHL/SHR/SAR/ROL/ROR/SHLD/SHRD）、数据移动（MOV/MOVZX/MOVSX/BSWAP）、内存（load/store/LEA 含 SIB 寻址）、乘除（MUL/IMUL/DIV/IDIV/CDQ/CQO）、位操作（BSF/BSR/LZCNT/TZCNT/POPCNT/BT*/ANDN）、分支（JMP/Jcc/CALL/SETcc/CMOVcc）、杂项（XCHG/PUSH/POP/INC/DEC/TEST/MFENCE/UD2/NOP）。
+
+**未实现**：SIMD/向量指令（SSE/AVX/AVX512）将作为后续独立工作。
+
 ### Unsafe 边界
 
 `unsafe` 仅在以下场景允许使用：
