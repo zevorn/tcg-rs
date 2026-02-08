@@ -1,0 +1,3 @@
+[workspace]
+members = ["tcg-core", "tcg-backend", "tcg-tests"]
+resolver = "2"

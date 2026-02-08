@@ -1,0 +1,8 @@
+[package]
+name = "tcg-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tcg-core = { path = "../tcg-core" }
+tcg-backend = { path = "../tcg-backend" }
