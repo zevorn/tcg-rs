@@ -36,11 +36,13 @@ pub struct Context {
     pub reserved_regs: RegSet,
 
     // -- Constant deduplication --
-    /// Per-type hash map from constant value to TempIdx, avoiding duplicate const temps.
+    /// Per-type hash map from constant value to TempIdx,
+    /// avoiding duplicate const temps.
     const_table: [HashMap<u64, TempIdx>; TYPE_COUNT],
 
     // -- Guest instruction tracking --
-    /// End offset in host code for each guest instruction (indexed by guest insn number).
+    /// End offset in host code for each guest instruction
+    /// (indexed by guest insn number).
     pub gen_insn_end_off: Vec<u16>,
 }
 
@@ -107,7 +109,8 @@ impl Context {
         idx
     }
 
-    /// Register a global temp (must be called before any non-global allocation).
+    /// Register a global temp (must be called before any
+    /// non-global allocation).
     /// The `base` is the TempIdx of the env pointer (a fixed temp).
     pub fn new_global(
         &mut self,
@@ -128,8 +131,14 @@ impl Context {
         idx
     }
 
-    /// Register a fixed-register temp (must be called before any non-global allocation).
-    pub fn new_fixed(&mut self, ty: Type, reg: u8, name: &'static str) -> TempIdx {
+    /// Register a fixed-register temp (must be called
+    /// before any non-global allocation).
+    pub fn new_fixed(
+        &mut self,
+        ty: Type,
+        reg: u8,
+        name: &'static str,
+    ) -> TempIdx {
         assert_eq!(
             self.temps.len() as u32,
             self.nb_globals,

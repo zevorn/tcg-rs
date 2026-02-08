@@ -46,14 +46,17 @@ pub const TCG_AREG0: Reg = Reg::Rbp;
 
 /// Callee-saved registers that the prologue must save/restore.
 /// Order matches QEMU's `tcg_target_callee_save_regs` (System V ABI).
-pub const CALLEE_SAVED: &[Reg] = &[Reg::Rbp, Reg::Rbx, Reg::R12, Reg::R13, Reg::R14, Reg::R15];
+pub const CALLEE_SAVED: &[Reg] =
+    &[Reg::Rbp, Reg::Rbx, Reg::R12, Reg::R13, Reg::R14, Reg::R15];
 
 /// Function argument registers (System V AMD64 ABI).
-pub const CALL_ARG_REGS: &[Reg] = &[Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9];
+pub const CALL_ARG_REGS: &[Reg] =
+    &[Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9];
 
 /// Registers reserved by the backend — not available for register allocation.
 /// RSP (stack pointer) and RBP (env pointer / TCG_AREG0).
-pub const RESERVED_REGS: RegSet = RegSet::from_raw((1 << Reg::Rsp as u64) | (1 << Reg::Rbp as u64));
+pub const RESERVED_REGS: RegSet =
+    RegSet::from_raw((1 << Reg::Rsp as u64) | (1 << Reg::Rbp as u64));
 
 /// Stack frame constants (matching QEMU's layout).
 pub const STACK_ALIGN: usize = 16;

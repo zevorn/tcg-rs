@@ -120,9 +120,9 @@ fn prologue_contains_sub_rsp() {
 fn epilogue_contains_add_rsp() {
     let (buf, gen) = gen_prologue_epilogue();
     let epilogue = &buf.as_slice()[gen.tb_ret_offset..];
-    let has_add = epilogue
-        .windows(3)
-        .any(|w| w[0] == 0x48 && (w[1] == 0x81 || w[1] == 0x83) && w[2] == 0xC4);
+    let has_add = epilogue.windows(3).any(|w| {
+        w[0] == 0x48 && (w[1] == 0x81 || w[1] == 0x83) && w[2] == 0xC4
+    });
     assert!(has_add, "epilogue should contain add rsp, imm");
 }
 
@@ -130,11 +130,14 @@ fn epilogue_contains_add_rsp() {
 fn epilogue_pop_count_matches_push() {
     let (buf, gen) = gen_prologue_epilogue();
     let epilogue = &buf.as_slice()[gen.tb_ret_offset..];
-    // Count pop instructions (0x58-0x5F for base regs, 0x41 0x58-0x5F for extended)
+    // Count pop instructions
+    // 0x58-0x5F base, 0x41 0x58-0x5F extended
     let mut pop_count = 0;
     let mut i = 0;
     while i < epilogue.len() {
-        if epilogue[i] == 0x41 && i + 1 < epilogue.len() && (0x58..=0x5F).contains(&epilogue[i + 1])
+        if epilogue[i] == 0x41
+            && i + 1 < epilogue.len()
+            && (0x58..=0x5F).contains(&epilogue[i + 1])
         {
             pop_count += 1;
             i += 2;
@@ -265,77 +268,95 @@ fn emit_bytes(f: impl FnOnce(&mut CodeBuffer)) -> Vec<u8> {
 #[test]
 fn arith_add_rr_32() {
     // add eax, ecx => 03 C1
-    let code = emit_bytes(|b| emit_arith_rr(b, ArithOp::Add, false, Reg::Rax, Reg::Rcx));
+    let code = emit_bytes(|b| {
+        emit_arith_rr(b, ArithOp::Add, false, Reg::Rax, Reg::Rcx)
+    });
     assert_eq!(code, [0x03, 0xC1]);
 }
 
 #[test]
 fn arith_add_rr_64() {
     // add rax, rcx => 48 03 C1
-    let code = emit_bytes(|b| emit_arith_rr(b, ArithOp::Add, true, Reg::Rax, Reg::Rcx));
+    let code = emit_bytes(|b| {
+        emit_arith_rr(b, ArithOp::Add, true, Reg::Rax, Reg::Rcx)
+    });
     assert_eq!(code, [0x48, 0x03, 0xC1]);
 }
 
 #[test]
 fn arith_add_rr_extended() {
     // add r8, r9 => 4D 03 C1
-    let code = emit_bytes(|b| emit_arith_rr(b, ArithOp::Add, true, Reg::R8, Reg::R9));
+    let code =
+        emit_bytes(|b| emit_arith_rr(b, ArithOp::Add, true, Reg::R8, Reg::R9));
     assert_eq!(code, [0x4D, 0x03, 0xC1]);
 }
 
 #[test]
 fn arith_sub_ri_imm8() {
     // sub eax, 0x10 => 83 E8 10
-    let code = emit_bytes(|b| emit_arith_ri(b, ArithOp::Sub, false, Reg::Rax, 0x10));
+    let code =
+        emit_bytes(|b| emit_arith_ri(b, ArithOp::Sub, false, Reg::Rax, 0x10));
     assert_eq!(code, [0x83, 0xE8, 0x10]);
 }
 
 #[test]
 fn arith_sub_ri_imm32() {
     // sub rax, 0x1000 => 48 81 E8 00 10 00 00
-    let code = emit_bytes(|b| emit_arith_ri(b, ArithOp::Sub, true, Reg::Rax, 0x1000));
+    let code =
+        emit_bytes(|b| emit_arith_ri(b, ArithOp::Sub, true, Reg::Rax, 0x1000));
     assert_eq!(code, [0x48, 0x81, 0xE8, 0x00, 0x10, 0x00, 0x00]);
 }
 
 #[test]
 fn arith_xor_rr_32() {
     // xor eax, eax => 33 C0
-    let code = emit_bytes(|b| emit_arith_rr(b, ArithOp::Xor, false, Reg::Rax, Reg::Rax));
+    let code = emit_bytes(|b| {
+        emit_arith_rr(b, ArithOp::Xor, false, Reg::Rax, Reg::Rax)
+    });
     assert_eq!(code, [0x33, 0xC0]);
 }
 
 #[test]
 fn arith_cmp_rr_64() {
     // cmp rdi, rsi => 48 3B FE
-    let code = emit_bytes(|b| emit_arith_rr(b, ArithOp::Cmp, true, Reg::Rdi, Reg::Rsi));
+    let code = emit_bytes(|b| {
+        emit_arith_rr(b, ArithOp::Cmp, true, Reg::Rdi, Reg::Rsi)
+    });
     assert_eq!(code, [0x48, 0x3B, 0xFE]);
 }
 
 #[test]
 fn arith_and_ri_imm8() {
     // and ecx, 0x7F => 83 E1 7F
-    let code = emit_bytes(|b| emit_arith_ri(b, ArithOp::And, false, Reg::Rcx, 0x7F));
+    let code =
+        emit_bytes(|b| emit_arith_ri(b, ArithOp::And, false, Reg::Rcx, 0x7F));
     assert_eq!(code, [0x83, 0xE1, 0x7F]);
 }
 
 #[test]
 fn arith_or_rr() {
     // or edx, ebx => 0B D3
-    let code = emit_bytes(|b| emit_arith_rr(b, ArithOp::Or, false, Reg::Rdx, Reg::Rbx));
+    let code = emit_bytes(|b| {
+        emit_arith_rr(b, ArithOp::Or, false, Reg::Rdx, Reg::Rbx)
+    });
     assert_eq!(code, [0x0B, 0xD3]);
 }
 
 #[test]
 fn arith_adc_rr() {
     // adc rax, rdx => 48 13 C2
-    let code = emit_bytes(|b| emit_arith_rr(b, ArithOp::Adc, true, Reg::Rax, Reg::Rdx));
+    let code = emit_bytes(|b| {
+        emit_arith_rr(b, ArithOp::Adc, true, Reg::Rax, Reg::Rdx)
+    });
     assert_eq!(code, [0x48, 0x13, 0xC2]);
 }
 
 #[test]
 fn arith_sbb_rr() {
     // sbb rax, rdx => 48 1B C2
-    let code = emit_bytes(|b| emit_arith_rr(b, ArithOp::Sbb, true, Reg::Rax, Reg::Rdx));
+    let code = emit_bytes(|b| {
+        emit_arith_rr(b, ArithOp::Sbb, true, Reg::Rax, Reg::Rdx)
+    });
     assert_eq!(code, [0x48, 0x1B, 0xC2]);
 }
 
@@ -365,21 +386,24 @@ fn not_32() {
 #[test]
 fn shift_shl_ri_1() {
     // shl eax, 1 => D1 E0
-    let code = emit_bytes(|b| emit_shift_ri(b, ShiftOp::Shl, false, Reg::Rax, 1));
+    let code =
+        emit_bytes(|b| emit_shift_ri(b, ShiftOp::Shl, false, Reg::Rax, 1));
     assert_eq!(code, [0xD1, 0xE0]);
 }
 
 #[test]
 fn shift_shl_ri_n() {
     // shl eax, 4 => C1 E0 04
-    let code = emit_bytes(|b| emit_shift_ri(b, ShiftOp::Shl, false, Reg::Rax, 4));
+    let code =
+        emit_bytes(|b| emit_shift_ri(b, ShiftOp::Shl, false, Reg::Rax, 4));
     assert_eq!(code, [0xC1, 0xE0, 0x04]);
 }
 
 #[test]
 fn shift_shr_ri_64() {
     // shr rax, 8 => 48 C1 E8 08
-    let code = emit_bytes(|b| emit_shift_ri(b, ShiftOp::Shr, true, Reg::Rax, 8));
+    let code =
+        emit_bytes(|b| emit_shift_ri(b, ShiftOp::Shr, true, Reg::Rax, 8));
     assert_eq!(code, [0x48, 0xC1, 0xE8, 0x08]);
 }
 
@@ -393,14 +417,16 @@ fn shift_sar_cl() {
 #[test]
 fn shift_rol_ri() {
     // rol ecx, 3 => C1 C1 03
-    let code = emit_bytes(|b| emit_shift_ri(b, ShiftOp::Rol, false, Reg::Rcx, 3));
+    let code =
+        emit_bytes(|b| emit_shift_ri(b, ShiftOp::Rol, false, Reg::Rcx, 3));
     assert_eq!(code, [0xC1, 0xC1, 0x03]);
 }
 
 #[test]
 fn shift_ror_ri() {
     // ror edx, 5 => C1 CA 05
-    let code = emit_bytes(|b| emit_shift_ri(b, ShiftOp::Ror, false, Reg::Rdx, 5));
+    let code =
+        emit_bytes(|b| emit_shift_ri(b, ShiftOp::Ror, false, Reg::Rdx, 5));
     assert_eq!(code, [0xC1, 0xCA, 0x05]);
 }
 
@@ -444,7 +470,8 @@ fn mov_ri_u32() {
 #[test]
 fn mov_ri_imm64() {
     // movabs rax, 0x123456789ABCDEF0 => 48 B8 F0 DE BC 9A 78 56 34 12
-    let code = emit_bytes(|b| emit_mov_ri(b, true, Reg::Rax, 0x123456789ABCDEF0));
+    let code =
+        emit_bytes(|b| emit_mov_ri(b, true, Reg::Rax, 0x123456789ABCDEF0));
     assert_eq!(code[0], 0x48); // REX.W
     assert_eq!(code[1], 0xB8); // MOV rax, imm64
     assert_eq!(code.len(), 10);
@@ -605,7 +632,8 @@ fn imul_ri_imm8() {
 #[test]
 fn imul_ri_imm32() {
     // imul eax, ecx, 0x1000 => 69 C1 00 10 00 00
-    let code = emit_bytes(|b| emit_imul_ri(b, false, Reg::Rax, Reg::Rcx, 0x1000));
+    let code =
+        emit_bytes(|b| emit_imul_ri(b, false, Reg::Rax, Reg::Rcx, 0x1000));
     assert_eq!(code, [0x69, 0xC1, 0x00, 0x10, 0x00, 0x00]);
 }
 
@@ -775,14 +803,16 @@ fn setcc_extended() {
 #[test]
 fn cmovcc_test() {
     // cmove eax, ecx => 0F 44 C1
-    let code = emit_bytes(|b| emit_cmovcc(b, X86Cond::Je, false, Reg::Rax, Reg::Rcx));
+    let code =
+        emit_bytes(|b| emit_cmovcc(b, X86Cond::Je, false, Reg::Rax, Reg::Rcx));
     assert_eq!(code, [0x0F, 0x44, 0xC1]);
 }
 
 #[test]
 fn cmovcc_64() {
     // cmovne rax, rcx => 48 0F 45 C1
-    let code = emit_bytes(|b| emit_cmovcc(b, X86Cond::Jne, true, Reg::Rax, Reg::Rcx));
+    let code =
+        emit_bytes(|b| emit_cmovcc(b, X86Cond::Jne, true, Reg::Rax, Reg::Rcx));
     assert_eq!(code, [0x48, 0x0F, 0x45, 0xC1]);
 }
 
@@ -942,7 +972,9 @@ fn x86cond_invert() {
 #[test]
 fn modrm_offset_rsp_sib() {
     // Verify RSP base always gets SIB byte
-    let code = emit_bytes(|b| emit_modrm_offset(b, OPC_MOVL_GvEv, Reg::Rax, Reg::Rsp, 0));
+    let code = emit_bytes(|b| {
+        emit_modrm_offset(b, OPC_MOVL_GvEv, Reg::Rax, Reg::Rsp, 0)
+    });
     // Should have SIB byte 0x24
     assert!(
         code.iter().any(|&x| x == 0x24),
@@ -953,7 +985,9 @@ fn modrm_offset_rsp_sib() {
 #[test]
 fn modrm_offset_rbp_disp8() {
     // Verify RBP base with offset=0 gets disp8=0
-    let code = emit_bytes(|b| emit_modrm_offset(b, OPC_MOVL_GvEv, Reg::Rax, Reg::Rbp, 0));
+    let code = emit_bytes(|b| {
+        emit_modrm_offset(b, OPC_MOVL_GvEv, Reg::Rax, Reg::Rbp, 0)
+    });
     // mod=01 with disp8=0
     let last = code[code.len() - 1];
     assert_eq!(last, 0x00, "RBP base with offset=0 should have disp8=0");

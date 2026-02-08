@@ -2,7 +2,8 @@
 
 use crate::code_buffer::CodeBuffer;
 use crate::x86_64::regs::{
-    Reg, CALLEE_SAVED, CALL_ARG_REGS, STACK_ADDEND, STATIC_CALL_ARGS_SIZE, TCG_AREG0,
+    Reg, CALLEE_SAVED, CALL_ARG_REGS, STACK_ADDEND, STATIC_CALL_ARGS_SIZE,
+    TCG_AREG0,
 };
 use crate::HostCodeGen;
 
@@ -95,7 +96,8 @@ pub const OPC_SHRD_Ib: u32 = 0xAC | P_EXT;
 
 // -- Sub-operation enums --
 
-/// Arithmetic sub-opcodes (used in /r field of 0x81/0x83 and shifted into GvEv).
+/// Arithmetic sub-opcodes (used in /r field of
+/// 0x81/0x83 and shifted into GvEv).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ArithOp {
@@ -188,8 +190,9 @@ impl X86Cond {
             tcg_core::Cond::Geu => X86Cond::Jae,
             tcg_core::Cond::Leu => X86Cond::Jbe,
             tcg_core::Cond::Gtu => X86Cond::Ja,
-            tcg_core::Cond::Always => X86Cond::Je, // caller should not use Jcc for Always
-            tcg_core::Cond::Never => X86Cond::Jne, // caller should not use Jcc for Never
+            // Caller should not use Jcc for Always/Never
+            tcg_core::Cond::Always => X86Cond::Je,
+            tcg_core::Cond::Never => X86Cond::Jne,
         }
     }
 
@@ -280,7 +283,13 @@ pub fn emit_modrm_ext(buf: &mut CodeBuffer, opc: u32, ext: u8, rm: Reg) {
 
 /// Emit opcode + ModR/M + displacement for memory [base + offset].
 /// Handles special cases: RBP needs explicit disp8=0, RSP needs SIB byte.
-pub fn emit_modrm_offset(buf: &mut CodeBuffer, opc: u32, r: Reg, base: Reg, offset: i32) {
+pub fn emit_modrm_offset(
+    buf: &mut CodeBuffer,
+    opc: u32,
+    r: Reg,
+    base: Reg,
+    offset: i32,
+) {
     emit_opc(buf, opc, r as u8, base as u8);
 
     let r3 = r.low3();
@@ -386,7 +395,13 @@ fn emit_opc_3(buf: &mut CodeBuffer, opc: u32, r: u8, rm: u8, index: u8) {
 }
 
 /// Emit opcode + ModR/M with /r extension for memory [base + offset].
-pub fn emit_modrm_ext_offset(buf: &mut CodeBuffer, opc: u32, ext: u8, base: Reg, offset: i32) {
+pub fn emit_modrm_ext_offset(
+    buf: &mut CodeBuffer,
+    opc: u32,
+    ext: u8,
+    base: Reg,
+    offset: i32,
+) {
     // Reuse emit_modrm_offset logic but with ext as the "r" field.
     // We need to manually handle REX since ext is not a real register.
     emit_opc(buf, opc, ext, base as u8);
@@ -422,13 +437,25 @@ pub fn emit_modrm_ext_offset(buf: &mut CodeBuffer, opc: u32, ext: u8, base: Reg,
 // -- Arithmetic instructions --
 
 /// Emit arithmetic reg, reg (ADD/SUB/AND/OR/XOR/CMP/ADC/SBB).
-pub fn emit_arith_rr(buf: &mut CodeBuffer, op: ArithOp, rexw: bool, dst: Reg, src: Reg) {
+pub fn emit_arith_rr(
+    buf: &mut CodeBuffer,
+    op: ArithOp,
+    rexw: bool,
+    dst: Reg,
+    src: Reg,
+) {
     let opc = (OPC_ARITH_GvEv + ((op as u32) << 3)) | rexw_flag(rexw);
     emit_modrm(buf, opc, dst, src);
 }
 
 /// Emit arithmetic reg, imm (auto-selects imm8 vs imm32).
-pub fn emit_arith_ri(buf: &mut CodeBuffer, op: ArithOp, rexw: bool, dst: Reg, imm: i32) {
+pub fn emit_arith_ri(
+    buf: &mut CodeBuffer,
+    op: ArithOp,
+    rexw: bool,
+    dst: Reg,
+    imm: i32,
+) {
     let w = rexw_flag(rexw);
     if (-128..=127).contains(&imm) {
         emit_modrm_ext(buf, OPC_ARITH_EvIb | w, op as u8, dst);
@@ -478,7 +505,13 @@ pub fn emit_not(buf: &mut CodeBuffer, rexw: bool, reg: Reg) {
 // -- Shift instructions --
 
 /// Emit shift reg, imm8.
-pub fn emit_shift_ri(buf: &mut CodeBuffer, op: ShiftOp, rexw: bool, dst: Reg, imm: u8) {
+pub fn emit_shift_ri(
+    buf: &mut CodeBuffer,
+    op: ShiftOp,
+    rexw: bool,
+    dst: Reg,
+    imm: u8,
+) {
     let w = rexw_flag(rexw);
     if imm == 1 {
         emit_modrm_ext(buf, OPC_SHIFT_1 | w, op as u8, dst);
@@ -545,12 +578,24 @@ pub fn emit_bswap(buf: &mut CodeBuffer, rexw: bool, reg: Reg) {
 // -- Memory operations --
 
 /// Emit MOV reg, [base+offset] (load).
-pub fn emit_load(buf: &mut CodeBuffer, rexw: bool, dst: Reg, base: Reg, offset: i32) {
+pub fn emit_load(
+    buf: &mut CodeBuffer,
+    rexw: bool,
+    dst: Reg,
+    base: Reg,
+    offset: i32,
+) {
     emit_modrm_offset(buf, OPC_MOVL_GvEv | rexw_flag(rexw), dst, base, offset);
 }
 
 /// Emit MOV [base+offset], reg (store).
-pub fn emit_store(buf: &mut CodeBuffer, rexw: bool, src: Reg, base: Reg, offset: i32) {
+pub fn emit_store(
+    buf: &mut CodeBuffer,
+    rexw: bool,
+    src: Reg,
+    base: Reg,
+    offset: i32,
+) {
     emit_modrm_offset(buf, OPC_MOVL_EvGv | rexw_flag(rexw), src, base, offset);
 }
 
@@ -560,13 +605,31 @@ pub fn emit_store_byte(buf: &mut CodeBuffer, src: Reg, base: Reg, offset: i32) {
 }
 
 /// Emit MOV [base+offset], imm32 (store immediate).
-pub fn emit_store_imm(buf: &mut CodeBuffer, rexw: bool, base: Reg, offset: i32, imm: i32) {
-    emit_modrm_ext_offset(buf, OPC_MOVL_EvIz | rexw_flag(rexw), 0, base, offset);
+pub fn emit_store_imm(
+    buf: &mut CodeBuffer,
+    rexw: bool,
+    base: Reg,
+    offset: i32,
+    imm: i32,
+) {
+    emit_modrm_ext_offset(
+        buf,
+        OPC_MOVL_EvIz | rexw_flag(rexw),
+        0,
+        base,
+        offset,
+    );
     buf.emit_u32(imm as u32);
 }
 
 /// Emit LEA dst, [base+offset].
-pub fn emit_lea(buf: &mut CodeBuffer, rexw: bool, dst: Reg, base: Reg, offset: i32) {
+pub fn emit_lea(
+    buf: &mut CodeBuffer,
+    rexw: bool,
+    dst: Reg,
+    base: Reg,
+    offset: i32,
+) {
     emit_modrm_offset(buf, OPC_LEA | rexw_flag(rexw), dst, base, offset);
 }
 
@@ -634,12 +697,24 @@ pub fn emit_store_sib(
 }
 
 /// Emit zero-extend load: MOVZBL/MOVZWL [base+offset].
-pub fn emit_load_zx(buf: &mut CodeBuffer, opc: u32, dst: Reg, base: Reg, offset: i32) {
+pub fn emit_load_zx(
+    buf: &mut CodeBuffer,
+    opc: u32,
+    dst: Reg,
+    base: Reg,
+    offset: i32,
+) {
     emit_modrm_offset(buf, opc, dst, base, offset);
 }
 
 /// Emit sign-extend load: MOVSBL/MOVSWL/MOVSLQ [base+offset].
-pub fn emit_load_sx(buf: &mut CodeBuffer, opc: u32, dst: Reg, base: Reg, offset: i32) {
+pub fn emit_load_sx(
+    buf: &mut CodeBuffer,
+    opc: u32,
+    dst: Reg,
+    base: Reg,
+    offset: i32,
+) {
     emit_modrm_offset(buf, opc, dst, base, offset);
 }
 
@@ -661,7 +736,13 @@ pub fn emit_imul_rr(buf: &mut CodeBuffer, rexw: bool, dst: Reg, src: Reg) {
 }
 
 /// Emit three-operand IMUL: dst = src * imm.
-pub fn emit_imul_ri(buf: &mut CodeBuffer, rexw: bool, dst: Reg, src: Reg, imm: i32) {
+pub fn emit_imul_ri(
+    buf: &mut CodeBuffer,
+    rexw: bool,
+    dst: Reg,
+    src: Reg,
+    imm: i32,
+) {
     let w = rexw_flag(rexw);
     if (-128..=127).contains(&imm) {
         emit_modrm(buf, OPC_IMUL_GvEvIb | w, dst, src);
@@ -745,7 +826,13 @@ pub fn emit_btc_ri(buf: &mut CodeBuffer, rexw: bool, reg: Reg, bit: u8) {
 }
 
 /// Emit ANDN dst, src1, src2 (BMI1: dst = ~src1 & src2). Uses VEX encoding.
-pub fn emit_andn(buf: &mut CodeBuffer, rexw: bool, dst: Reg, src1: Reg, src2: Reg) {
+pub fn emit_andn(
+    buf: &mut CodeBuffer,
+    rexw: bool,
+    dst: Reg,
+    src1: Reg,
+    src2: Reg,
+) {
     emit_vex_modrm(buf, OPC_ANDN | rexw_flag(rexw), dst, src1, src2);
 }
 
@@ -791,7 +878,13 @@ pub fn emit_setcc(buf: &mut CodeBuffer, cond: X86Cond, dst: Reg) {
 }
 
 /// Emit CMOVcc dst, src (conditional move).
-pub fn emit_cmovcc(buf: &mut CodeBuffer, cond: X86Cond, rexw: bool, dst: Reg, src: Reg) {
+pub fn emit_cmovcc(
+    buf: &mut CodeBuffer,
+    cond: X86Cond,
+    rexw: bool,
+    dst: Reg,
+    src: Reg,
+) {
     emit_modrm(
         buf,
         (OPC_CMOVCC + (cond as u32)) | rexw_flag(rexw),
@@ -929,13 +1022,25 @@ pub fn emit_dec(buf: &mut CodeBuffer, rexw: bool, reg: Reg) {
 }
 
 /// Emit SHLD dst, src, imm8 (double-precision shift left).
-pub fn emit_shld_ri(buf: &mut CodeBuffer, rexw: bool, dst: Reg, src: Reg, imm: u8) {
+pub fn emit_shld_ri(
+    buf: &mut CodeBuffer,
+    rexw: bool,
+    dst: Reg,
+    src: Reg,
+    imm: u8,
+) {
     emit_modrm(buf, OPC_SHLD_Ib | rexw_flag(rexw), src, dst);
     buf.emit_u8(imm);
 }
 
 /// Emit SHRD dst, src, imm8 (double-precision shift right).
-pub fn emit_shrd_ri(buf: &mut CodeBuffer, rexw: bool, dst: Reg, src: Reg, imm: u8) {
+pub fn emit_shrd_ri(
+    buf: &mut CodeBuffer,
+    rexw: bool,
+    dst: Reg,
+    src: Reg,
+    imm: u8,
+) {
     emit_modrm(buf, OPC_SHRD_Ib | rexw_flag(rexw), src, dst);
     buf.emit_u8(imm);
 }
@@ -1073,7 +1178,12 @@ impl HostCodeGen for X86_64CodeGen {
         emit_ret(buf);
     }
 
-    fn patch_jump(&mut self, buf: &mut CodeBuffer, jump_offset: usize, target_offset: usize) {
+    fn patch_jump(
+        &mut self,
+        buf: &mut CodeBuffer,
+        jump_offset: usize,
+        target_offset: usize,
+    ) {
         let disp = (target_offset as i64) - (jump_offset as i64 + 5);
         assert!(
             disp >= i32::MIN as i64 && disp <= i32::MAX as i64,

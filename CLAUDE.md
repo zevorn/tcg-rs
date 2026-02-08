@@ -178,6 +178,19 @@ x86-64 后端位于 `tcg-backend/src/x86_64/`，包含三个文件：
 - **前端示例**：`~/qemu/target/riscv/translate.c`、`~/qemu/target/arm/tcg/translate.c`
 - **Decodetree**：`~/qemu/docs/devel/decodetree.rst`（基于模式的指令解码器生成器）
 
+## 代码风格
+
+代码行宽不超过 **80 列**。详细规范见 [`docs/coding-style.md`](docs/coding-style.md)。
+
+核心规则：
+
+- 缩进使用 4 个空格，禁止 Tab
+- 代码行宽上限 80 列，注释和文档同样遵守
+- 运行 `cargo fmt` 格式化，`cargo clippy -- -D warnings` 零警告
+- 注释使用英文，仅在关键逻辑处添加
+- 常量命名：QEMU 风格的操作码常量允许 `non_upper_case_globals`
+- `unsafe` 仅限 JIT 执行和客户内存访问
+
 ## 设计原则
 
 - **不向后兼容**：自由破坏、积极清理，不做迁移垫片。

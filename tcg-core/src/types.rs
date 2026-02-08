@@ -101,7 +101,12 @@ impl Cond {
     /// Swap operand order (e.g. Lt becomes Gt).
     pub const fn swap(self) -> Cond {
         match self {
-            Cond::Eq | Cond::Ne | Cond::Never | Cond::Always | Cond::TstEq | Cond::TstNe => self,
+            Cond::Eq
+            | Cond::Ne
+            | Cond::Never
+            | Cond::Always
+            | Cond::TstEq
+            | Cond::TstNe => self,
             Cond::Lt => Cond::Gt,
             Cond::Ge => Cond::Le,
             Cond::Le => Cond::Ge,
@@ -122,7 +127,8 @@ impl Cond {
     }
 }
 
-/// Memory operation descriptor — encodes size, signedness, endianness, alignment.
+/// Memory operation descriptor — encodes size, signedness,
+/// endianness, alignment.
 ///
 /// Maps to QEMU's `MemOp`. Bit-packed for compact storage in IR ops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

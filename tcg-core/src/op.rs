@@ -80,7 +80,12 @@ impl Op {
         }
     }
 
-    pub fn with_args(idx: OpIdx, opc: Opcode, op_type: Type, args: &[TempIdx]) -> Self {
+    pub fn with_args(
+        idx: OpIdx,
+        opc: Opcode,
+        op_type: Type,
+        args: &[TempIdx],
+    ) -> Self {
         let mut op = Self::new(idx, opc, op_type);
         let n = args.len().min(MAX_OP_ARGS);
         op.args[..n].copy_from_slice(&args[..n]);

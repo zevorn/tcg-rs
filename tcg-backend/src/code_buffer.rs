@@ -7,7 +7,8 @@ const DEFAULT_CODE_BUF_SIZE: usize = 16 * 1024 * 1024;
 /// JIT code buffer backed by mmap'd memory.
 ///
 /// Manages a region of memory for writing and executing generated host code.
-/// Follows W^X discipline: the buffer is either writable or executable, never both.
+/// Follows W^X discipline: the buffer is either writable
+/// or executable, never both.
 pub struct CodeBuffer {
     ptr: *mut u8,
     size: usize,
@@ -133,7 +134,11 @@ impl CodeBuffer {
             "code buffer overflow"
         );
         unsafe {
-            ptr::copy_nonoverlapping(data.as_ptr(), self.ptr.add(self.offset), data.len());
+            ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                self.ptr.add(self.offset),
+                data.len(),
+            );
         }
         self.offset += data.len();
     }

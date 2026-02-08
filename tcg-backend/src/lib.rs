@@ -22,7 +22,12 @@ pub trait HostCodeGen {
 
     /// Patch a direct jump at `jump_offset` to point to `target_offset`.
     /// Used for TB chaining (`goto_tb` patching).
-    fn patch_jump(&mut self, buf: &mut CodeBuffer, jump_offset: usize, target_offset: usize);
+    fn patch_jump(
+        &mut self,
+        buf: &mut CodeBuffer,
+        jump_offset: usize,
+        target_offset: usize,
+    );
 
     /// Return the offset of the TB return path in the code buffer.
     fn epilogue_offset(&self) -> usize;

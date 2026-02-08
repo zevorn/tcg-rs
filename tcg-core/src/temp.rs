@@ -121,7 +121,12 @@ impl Temp {
         }
     }
 
-    pub fn new_fixed(idx: TempIdx, ty: Type, reg: u8, name: &'static str) -> Self {
+    pub fn new_fixed(
+        idx: TempIdx,
+        ty: Type,
+        reg: u8,
+        name: &'static str,
+    ) -> Self {
         Self {
             idx,
             ty,
