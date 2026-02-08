@@ -1,28 +1,64 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件为 Claude Code (claude.ai/code) 在本仓库中工作时提供指导。
 
-## Project Overview
+## 项目概述
 
-tcg-rs is a Rust reimplementation of QEMU's TCG (Tiny Code Generator) — the dynamic binary translation engine that converts guest architecture instructions into host machine code at runtime. The reference implementation lives at `~/qemu/tcg/`, `~/qemu/accel/tcg/`, and `~/qemu/include/tcg/`.
+tcg-rs 是 QEMU TCG（Tiny Code Generator）的 Rust 重新实现——一个动态二进制翻译引擎，在运行时将客户架构指令转换为宿主机器码。参考实现位于 `~/qemu/tcg/`、`~/qemu/accel/tcg/` 和 `~/qemu/include/tcg/`。
 
-## Build & Development Commands
+## 构建与开发命令
 
 ```bash
-cargo build                          # Build all crates
-cargo build --release                # Release build
-cargo test                           # Run all tests
-cargo test -p tcg-core               # Test a single crate
-cargo test -- test_name              # Run a specific test
-cargo clippy -- -D warnings          # Lint
-cargo fmt --check                    # Check formatting
-cargo fmt                            # Auto-format
-cargo doc --open                     # Generate and open docs
+cargo build                          # 构建所有 crate
+cargo build --release                # Release 构建
+cargo test                           # 运行所有测试
+cargo test -p tcg-core               # 测试单个 crate
+cargo test -- test_name              # 运行指定测试
+cargo clippy -- -D warnings          # Lint 检查
+cargo fmt --check                    # 格式检查
+cargo fmt                            # 自动格式化
+cargo doc --open                     # 生成并打开文档
 ```
 
-## Architecture
+## Git Commit 规范
 
-### Translation Pipeline
+Commit message 必须使用英文编写。格式如下：
+
+```
+module: subject
+
+具体修改内容的详细说明。
+
+Signed-off-by: Name <email>
+```
+
+**Subject 行规则**：
+
+- 格式为 `module: subject`，其中 `module` 是受影响的主要模块名
+- 常用 module 名：`tcg-core`、`tcg-backend`、`tcg-tests`、`docs`、`project`（跨模块变更）
+- subject 使用小写开头，祈使语气（如 `add`、`fix`、`remove`），不加句号
+- 总长度不超过 72 字符
+
+**Body 规则**：
+
+- 与 subject 之间空一行
+- 说明本次变更的内容和原因（what & why），而非如何实现（how）
+- 每行不超过 72 字符
+
+**示例**：
+
+```
+tcg-core: add vector opcode support
+
+Add V64/V128/V256 vector opcodes to the unified opcode enum.
+Each vector op carries OpFlags::VECTOR for backend dispatch.
+
+Signed-off-by: Chao Liu <chao.liu.zevorn@gmail.com>
+```
+
+## 架构
+
+### 翻译流水线
 
 ```
 Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen) → Host Binary
@@ -30,48 +66,48 @@ Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen
                               TranslationBlock Cache
 ```
 
-### Crate Structure
+### Crate 结构
 
-| Crate | Responsibility | QEMU Reference |
-|-------|---------------|----------------|
-| `tcg-core` | IR definitions: opcodes, types, temps, TCGOp, TCGContext, labels | `include/tcg/tcg.h`, `tcg/tcg-opc.h`, `tcg/tcg-common.c` |
-| `tcg-ir` | IR generation API (`tcg_gen_*` equivalents), op emission | `tcg/tcg-op.c`, `tcg/tcg-op-ldst.c`, `tcg/tcg-op-vec.c`, `tcg/tcg-op-gvec.c` |
-| `tcg-opt` | IR optimizer: constant/copy propagation, DCE, algebraic simplification | `tcg/optimize.c` |
-| `tcg-backend` | Host code generation trait + per-arch backends | `tcg/tcg.c` (codegen parts), `tcg/<arch>/tcg-target.c.inc` |
-| `tcg-frontend` | Guest instruction decoding trait + per-arch decoders | `target/<arch>/translate.c`, `accel/tcg/translator.c` |
-| `tcg-exec` | CPU execution loop, TB cache (jump cache + hash table), TB linking/invalidation | `accel/tcg/cpu-exec.c`, `accel/tcg/translate-all.c`, `accel/tcg/tb-maint.c` |
-| `tcg-mmu` | Software TLB, guest memory access (fast/slow path) | `accel/tcg/cputlb.c` |
-| `tcg-runtime` | Runtime helper functions called from generated code | `accel/tcg/tcg-runtime.c`, `accel/tcg/tcg-runtime-gvec.c` |
+| Crate | 职责 | QEMU 参考 |
+|-------|------|----------|
+| `tcg-core` | IR 定义：opcodes、types、temps、TCGOp、TCGContext、labels | `include/tcg/tcg.h`、`tcg/tcg-opc.h`、`tcg/tcg-common.c` |
+| `tcg-ir` | IR 生成 API（`tcg_gen_*` 等价物），op 发射 | `tcg/tcg-op.c`、`tcg/tcg-op-ldst.c`、`tcg/tcg-op-vec.c`、`tcg/tcg-op-gvec.c` |
+| `tcg-opt` | IR 优化器：常量/拷贝传播、DCE、代数化简 | `tcg/optimize.c` |
+| `tcg-backend` | 宿主代码生成 trait + 各架构后端 | `tcg/tcg.c`（codegen 部分）、`tcg/<arch>/tcg-target.c.inc` |
+| `tcg-frontend` | 客户指令解码 trait + 各架构解码器 | `target/<arch>/translate.c`、`accel/tcg/translator.c` |
+| `tcg-exec` | CPU 执行循环、TB 缓存（jump cache + hash table）、TB 链接/失效 | `accel/tcg/cpu-exec.c`、`accel/tcg/translate-all.c`、`accel/tcg/tb-maint.c` |
+| `tcg-mmu` | 软件 TLB、客户内存访问（快速/慢速路径） | `accel/tcg/cputlb.c` |
+| `tcg-runtime` | 生成代码调用的运行时辅助函数 | `accel/tcg/tcg-runtime.c`、`accel/tcg/tcg-runtime-gvec.c` |
 
-### Key Data Structures (C → Rust Mapping)
+### 核心数据结构（C → Rust 映射）
 
-| QEMU C Struct | Rust Equivalent | Purpose |
-|---------------|----------------|---------|
-| `TCGOpcode` (DEF macro enum) | `enum Opcode` | ~150 IR opcodes (arithmetic, logic, memory, control flow, vector) |
-| `TCGType` | `enum Type { I32, I64, I128, V64, V128, V256 }` | IR value types |
-| `TCGTemp` | `struct Temp` | IR variable (global, local, const, fixed-reg) |
-| `TCGTempKind` | `enum TempKind { Ebb, Tb, Global, Fixed, Const }` | Variable lifetime/scope |
-| `TCGOp` | `struct Op` | Single IR operation with opcode + args |
-| `TCGContext` | `struct Context` | Per-thread translation state: temps, ops list, code buffer, register allocator |
-| `TCGLabel` | `struct Label` | Branch target within a TB |
-| `TranslationBlock` | `struct TranslationBlock` | Cached translated code block: guest PC → host code mapping |
-| `CPUJumpCache` | Per-CPU direct-mapped TB cache | 4096-entry fast lookup by PC hash |
-| `TBContext.htable` | Global TB hash table | 32768-bucket lookup by (phys_pc, pc, flags) |
-| `TCGCond` | `enum Cond { Eq, Ne, Lt, Ge, Ltu, Geu, ... }` | Comparison conditions |
-| `MemOp` | `enum MemOp` | Memory access size/signedness/endianness/alignment |
+| QEMU C 结构 | Rust 等价物 | 用途 |
+|-------------|------------|------|
+| `TCGOpcode`（DEF 宏枚举） | `enum Opcode` | ~70 个统一多态 IR opcodes |
+| `TCGType` | `enum Type { I32, I64, I128, V64, V128, V256 }` | IR 值类型 |
+| `TCGTemp` | `struct Temp` | IR 变量（global、local、const、fixed-reg） |
+| `TCGTempKind` | `enum TempKind { Ebb, Tb, Global, Fixed, Const }` | 变量生命周期/作用域 |
+| `TCGOp` | `struct Op` | 单个 IR 操作（opcode + args） |
+| `TCGContext` | `struct Context` | 每线程翻译状态：temps、ops 列表、代码缓冲区、寄存器分配器 |
+| `TCGLabel` | `struct Label` | TB 内的分支目标 |
+| `TranslationBlock` | `struct TranslationBlock` | 缓存的翻译代码块：guest PC → host code 映射 |
+| `CPUJumpCache` | `struct JumpCache` | 每 CPU 直接映射 TB 缓存，4096 项，按 PC 哈希查找 |
+| `TBContext.htable` | 全局 TB 哈希表 | 32768 桶，按 (phys_pc, pc, flags) 查找 |
+| `TCGCond` | `enum Cond { Eq, Ne, Lt, Ge, Ltu, Geu, ... }` | 比较条件 |
+| `MemOp` | `struct MemOp(u16)` | 内存访问大小/符号/字节序/对齐 |
 
-### Translation Block Lifecycle
+### 翻译块生命周期
 
-1. **Lookup**: PC hash → jump cache (per-CPU, 4096 entries) → global hash table (32K buckets)
-2. **Miss → Translate**: Frontend decodes guest instructions → emits TCG IR → optimizer runs → backend generates host code
-3. **Cache**: Insert into hash table and jump cache
-4. **Execute**: Jump to generated host code
-5. **Link**: Patch direct jumps between TBs (`goto_tb`/`exit_tb` for direct branches, `lookup_and_goto_ptr` for indirect)
-6. **Invalidate**: On self-modifying code, page unmap, or cache full — unlink and remove
+1. **查找**：PC 哈希 → jump cache（每 CPU，4096 项）→ 全局哈希表（32K 桶）
+2. **未命中 → 翻译**：前端解码客户指令 → 发射 TCG IR → 优化器运行 → 后端生成宿主代码
+3. **缓存**：插入哈希表和 jump cache
+4. **执行**：跳转到生成的宿主代码
+5. **链接**：修补 TB 间的直接跳转（`goto_tb`/`exit_tb` 用于直接分支，`lookup_and_goto_ptr` 用于间接分支）
+6. **失效**：自修改代码、页面取消映射或缓存满时——解链并移除
 
-### Frontend Trait Design
+### 前端 Trait 设计
 
-Each guest architecture implements a decoder trait:
+每个客户架构实现一个解码器 trait：
 
 ```rust
 trait GuestDecoder {
@@ -81,54 +117,56 @@ trait GuestDecoder {
 }
 ```
 
-Reference: `~/qemu/accel/tcg/translator.c` (`translator_loop`) and `~/qemu/target/riscv/translate.c`.
+参考：`~/qemu/accel/tcg/translator.c`（`translator_loop`）和 `~/qemu/target/riscv/translate.c`。
 
-### Backend Trait Design
+### 后端 Trait 设计
 
-Each host architecture implements a code generator trait:
+每个宿主架构实现一个代码生成器 trait：
 
 ```rust
 trait HostCodeGen {
-    fn emit_op(&mut self, op: &Op, buf: &mut CodeBuffer);
     fn emit_prologue(&mut self, buf: &mut CodeBuffer);
     fn emit_epilogue(&mut self, buf: &mut CodeBuffer);
-    fn patch_jump(&mut self, jump_site: usize, target: usize);
+    fn patch_jump(&mut self, buf: &mut CodeBuffer, jump_offset: usize, target_offset: usize);
+    fn epilogue_offset(&self) -> usize;
+    fn init_context(&self, ctx: &mut Context);
 }
 ```
 
-Reference: `~/qemu/tcg/<arch>/tcg-target.c.inc` and `~/qemu/tcg/<arch>/tcg-target.h`.
+参考：`~/qemu/tcg/<arch>/tcg-target.c.inc` 和 `~/qemu/tcg/<arch>/tcg-target.h`。
 
-### Unsafe Boundaries
+### Unsafe 边界
 
-`unsafe` is acceptable only in:
-- JIT code buffer allocation and execution (mmap + mprotect RWX transitions)
-- Calling into generated host code (`fn()` pointer cast from code buffer)
-- Raw pointer access for guest memory simulation (TLB fast path)
-- Inline assembly in backend code emitters
-- FFI if interfacing with external libraries
+`unsafe` 仅在以下场景允许使用：
 
-All other code must be safe Rust.
+- JIT 代码缓冲区分配和执行（mmap + mprotect RWX 转换）
+- 调用生成的宿主代码（从代码缓冲区进行 `fn()` 指针转换）
+- 客户内存模拟的原始指针访问（TLB 快速路径）
+- 后端代码发射器中的内联汇编
+- 与外部库的 FFI 接口
 
-## QEMU Reference Paths
+所有其他代码必须是安全的 Rust。
 
-Key source files for understanding the original implementation:
+## QEMU 参考路径
 
-- **TCG core**: `~/qemu/tcg/tcg.c` (codegen + register allocator), `~/qemu/tcg/tcg-op.c` (IR emission)
-- **Optimizer**: `~/qemu/tcg/optimize.c` (z_mask/o_mask/s_mask bit tracking, constant folding, copy propagation)
-- **Execution loop**: `~/qemu/accel/tcg/cpu-exec.c` (TB lookup → execute → link cycle)
-- **TB management**: `~/qemu/accel/tcg/translate-all.c`, `~/qemu/accel/tcg/tb-maint.c`
-- **Software TLB**: `~/qemu/accel/tcg/cputlb.c` (fast path inline, slow path helper)
-- **Opcodes**: `~/qemu/include/tcg/tcg-opc.h` (DEF macro list of all IR ops)
-- **Documentation**: `~/qemu/docs/devel/tcg.rst`, `tcg-ops.rst`, `multi-thread-tcg.rst`
-- **Backend example**: `~/qemu/tcg/aarch64/`, `~/qemu/tcg/i386/`, `~/qemu/tcg/riscv/`
-- **Frontend example**: `~/qemu/target/riscv/translate.c`, `~/qemu/target/arm/tcg/translate.c`
-- **Decodetree**: `~/qemu/docs/devel/decodetree.rst` (pattern-based instruction decoder generator)
+理解原始实现的关键源文件：
 
-## Design Principles
+- **TCG 核心**：`~/qemu/tcg/tcg.c`（codegen + 寄存器分配器）、`~/qemu/tcg/tcg-op.c`（IR 发射）
+- **优化器**：`~/qemu/tcg/optimize.c`（z_mask/o_mask/s_mask 位追踪、常量折叠、拷贝传播）
+- **执行循环**：`~/qemu/accel/tcg/cpu-exec.c`（TB 查找 → 执行 → 链接循环）
+- **TB 管理**：`~/qemu/accel/tcg/translate-all.c`、`~/qemu/accel/tcg/tb-maint.c`
+- **软件 TLB**：`~/qemu/accel/tcg/cputlb.c`（快速路径内联、慢速路径辅助函数）
+- **Opcodes**：`~/qemu/include/tcg/tcg-opc.h`（所有 IR ops 的 DEF 宏列表）
+- **文档**：`~/qemu/docs/devel/tcg.rst`、`tcg-ops.rst`、`multi-thread-tcg.rst`
+- **后端示例**：`~/qemu/tcg/aarch64/`、`~/qemu/tcg/i386/`、`~/qemu/tcg/riscv/`
+- **前端示例**：`~/qemu/target/riscv/translate.c`、`~/qemu/target/arm/tcg/translate.c`
+- **Decodetree**：`~/qemu/docs/devel/decodetree.rst`（基于模式的指令解码器生成器）
 
-- **No backward compatibility**: break freely, clean up aggressively, no migration shims.
-- **Trait-based extensibility**: frontends and backends are trait implementations, not conditional compilation.
-- **Arena allocation for IR**: TCG ops form a linked list per TB — use an arena allocator (e.g., `bumpalo` or typed-arena) instead of malloc chains.
-- **Enum-driven opcodes**: replace C's `DEF()` macro pattern with a proper Rust enum with `#[repr(u8)]`.
-- **Type-safe IR builder**: the `tcg_gen_*` API should use Rust's type system to prevent mixing I32/I64 operands at compile time.
-- **Minimal `unsafe`**: confine to JIT execution and guest memory access; everything else safe.
+## 设计原则
+
+- **不向后兼容**：自由破坏、积极清理，不做迁移垫片。
+- **基于 Trait 的可扩展性**：前端和后端是 trait 实现，而非条件编译。
+- **IR 的 Arena 分配**：TCG ops 在每个 TB 中形成链表——使用 arena 分配器（如 `bumpalo` 或 typed-arena）替代 malloc 链。
+- **枚举驱动的 Opcodes**：用带 `#[repr(u8)]` 的 Rust 枚举替代 C 的 `DEF()` 宏模式。
+- **类型安全的 IR 构建器**：`tcg_gen_*` API 应利用 Rust 的类型系统在编译期防止混用 I32/I64 操作数。
+- **最小化 `unsafe`**：限制在 JIT 执行和客户内存访问中；其他一切使用安全 Rust。
