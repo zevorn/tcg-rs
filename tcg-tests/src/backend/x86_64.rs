@@ -586,6 +586,20 @@ fn load_disp32() {
 }
 
 #[test]
+fn load_disp8_negative_boundary() {
+    // mov rax, [rcx-128] => 48 8B 41 80
+    let code = emit_bytes(|b| emit_load(b, true, Reg::Rax, Reg::Rcx, -128));
+    assert_eq!(code, [0x48, 0x8B, 0x41, 0x80]);
+}
+
+#[test]
+fn load_disp32_negative_boundary() {
+    // mov rax, [rcx-129] => 48 8B 81 7F FF FF FF
+    let code = emit_bytes(|b| emit_load(b, true, Reg::Rax, Reg::Rcx, -129));
+    assert_eq!(code, [0x48, 0x8B, 0x81, 0x7F, 0xFF, 0xFF, 0xFF]);
+}
+
+#[test]
 fn lea_base_offset() {
     // lea rax, [rcx+0x10] => 48 8D 41 10
     let code = emit_bytes(|b| emit_lea(b, true, Reg::Rax, Reg::Rcx, 0x10));
@@ -746,6 +760,25 @@ fn jcc_je() {
 }
 
 #[test]
+fn jcc_backward_disp32() {
+    let mut buf = CodeBuffer::new(4096).unwrap();
+    for _ in 0..10 {
+        buf.emit_u8(0x90);
+    }
+    emit_jcc(&mut buf, X86Cond::Je, 0);
+    let code = buf.as_slice();
+    // after = 10 + 2 + 4 = 16, disp = -16 => F0 FF FF FF
+    assert_eq!(&code[10..16], [0x0F, 0x84, 0xF0, 0xFF, 0xFF, 0xFF]);
+}
+
+#[test]
+#[should_panic(expected = "jcc displacement out of i32 range")]
+fn jcc_out_of_range_panics() {
+    let mut buf = CodeBuffer::new(4096).unwrap();
+    emit_jcc(&mut buf, X86Cond::Je, usize::MAX);
+}
+
+#[test]
 fn jmp_rel32() {
     let mut buf = CodeBuffer::new(4096).unwrap();
     emit_jmp(&mut buf, 100);
@@ -756,6 +789,25 @@ fn jmp_rel32() {
 }
 
 #[test]
+fn jmp_backward_disp32() {
+    let mut buf = CodeBuffer::new(4096).unwrap();
+    for _ in 0..10 {
+        buf.emit_u8(0x90);
+    }
+    emit_jmp(&mut buf, 0);
+    let code = buf.as_slice();
+    // after = 10 + 1 + 4 = 15, disp = -15 => F1 FF FF FF
+    assert_eq!(&code[10..15], [0xE9, 0xF1, 0xFF, 0xFF, 0xFF]);
+}
+
+#[test]
+#[should_panic(expected = "jmp displacement out of i32 range")]
+fn jmp_out_of_range_panics() {
+    let mut buf = CodeBuffer::new(4096).unwrap();
+    emit_jmp(&mut buf, usize::MAX);
+}
+
+#[test]
 fn call_rel32() {
     let mut buf = CodeBuffer::new(4096).unwrap();
     emit_call(&mut buf, 100);
@@ -763,6 +815,25 @@ fn call_rel32() {
     assert_eq!(code[0], 0xE8);
     // disp = 100 - 5 = 95 = 0x5F
     assert_eq!(code[1], 0x5F);
+}
+
+#[test]
+fn call_backward_disp32() {
+    let mut buf = CodeBuffer::new(4096).unwrap();
+    for _ in 0..10 {
+        buf.emit_u8(0x90);
+    }
+    emit_call(&mut buf, 0);
+    let code = buf.as_slice();
+    // after = 10 + 1 + 4 = 15, disp = -15 => F1 FF FF FF
+    assert_eq!(&code[10..15], [0xE8, 0xF1, 0xFF, 0xFF, 0xFF]);
+}
+
+#[test]
+#[should_panic(expected = "call displacement out of i32 range")]
+fn call_out_of_range_panics() {
+    let mut buf = CodeBuffer::new(4096).unwrap();
+    emit_call(&mut buf, usize::MAX);
 }
 
 #[test]
@@ -784,6 +855,13 @@ fn call_reg_test() {
     // call *rax => FF D0
     let code = emit_bytes(|b| emit_call_reg(b, Reg::Rax));
     assert_eq!(code, [0xFF, 0xD0]);
+}
+
+#[test]
+fn call_reg_extended() {
+    // call *r12 => 41 FF D4
+    let code = emit_bytes(|b| emit_call_reg(b, Reg::R12));
+    assert_eq!(code, [0x41, 0xFF, 0xD4]);
 }
 
 #[test]
@@ -875,6 +953,27 @@ fn push_imm8() {
 }
 
 #[test]
+fn push_imm8_upper_boundary() {
+    // push 127 => 6A 7F
+    let code = emit_bytes(|b| emit_push_imm(b, 127));
+    assert_eq!(code, [0x6A, 0x7F]);
+}
+
+#[test]
+fn push_imm8_lower_boundary() {
+    // push -128 => 6A 80
+    let code = emit_bytes(|b| emit_push_imm(b, -128));
+    assert_eq!(code, [0x6A, 0x80]);
+}
+
+#[test]
+fn push_imm32_boundary() {
+    // push 128 => 68 80 00 00 00
+    let code = emit_bytes(|b| emit_push_imm(b, 128));
+    assert_eq!(code, [0x68, 0x80, 0x00, 0x00, 0x00]);
+}
+
+#[test]
 fn push_imm32() {
     // push 0x1000 => 68 00 10 00 00
     let code = emit_bytes(|b| emit_push_imm(b, 0x1000));
@@ -903,6 +1002,12 @@ fn ud2_test() {
 fn nop_1() {
     let code = emit_bytes(|b| emit_nops(b, 1));
     assert_eq!(code, [0x90]);
+}
+
+#[test]
+fn nop_0() {
+    let code = emit_bytes(|b| emit_nops(b, 0));
+    assert!(code.is_empty());
 }
 
 #[test]
@@ -957,6 +1062,12 @@ fn x86cond_from_tcg() {
     assert_eq!(X86Cond::from_tcg(tcg_core::Cond::Ge), X86Cond::Jge);
     assert_eq!(X86Cond::from_tcg(tcg_core::Cond::Ltu), X86Cond::Jb);
     assert_eq!(X86Cond::from_tcg(tcg_core::Cond::Geu), X86Cond::Jae);
+}
+
+#[test]
+fn x86cond_from_tcg_always_never_fallback() {
+    assert_eq!(X86Cond::from_tcg(tcg_core::Cond::Always), X86Cond::Je);
+    assert_eq!(X86Cond::from_tcg(tcg_core::Cond::Never), X86Cond::Jne);
 }
 
 #[test]
@@ -1065,6 +1176,58 @@ fn load_sib_no_disp() {
     assert_eq!(code, [0x48, 0x8B, 0x04, 0x51]);
 }
 
+#[test]
+fn lea_sib_r12_index() {
+    // lea rax, [rcx+r12*4+0x10] => 4A 8D 44 A1 10
+    let code = emit_bytes(|b| {
+        emit_lea_sib(b, true, Reg::Rax, Reg::Rcx, Reg::R12, 2, 0x10)
+    });
+    assert_eq!(code, [0x4A, 0x8D, 0x44, 0xA1, 0x10]);
+}
+
+#[test]
+fn lea_sib_r13_base_r12_index_no_disp() {
+    // lea rax, [r13+r12*2] => 4B 8D 44 65 00
+    let code = emit_bytes(|b| {
+        emit_lea_sib(b, true, Reg::Rax, Reg::R13, Reg::R12, 1, 0)
+    });
+    assert_eq!(code, [0x4B, 0x8D, 0x44, 0x65, 0x00]);
+}
+
+#[test]
+fn load_sib_r12_index() {
+    // mov rax, [rcx+r12*4+0x10] => 4A 8B 44 A1 10
+    let code = emit_bytes(|b| {
+        emit_load_sib(b, true, Reg::Rax, Reg::Rcx, Reg::R12, 2, 0x10)
+    });
+    assert_eq!(code, [0x4A, 0x8B, 0x44, 0xA1, 0x10]);
+}
+
+#[test]
+fn store_sib_r12_index() {
+    // mov [rcx+r12*4+0x10], rax => 4A 89 44 A1 10
+    let code = emit_bytes(|b| {
+        emit_store_sib(b, true, Reg::Rax, Reg::Rcx, Reg::R12, 2, 0x10)
+    });
+    assert_eq!(code, [0x4A, 0x89, 0x44, 0xA1, 0x10]);
+}
+
+#[test]
+#[should_panic(expected = "RSP cannot be encoded as a SIB index register")]
+fn lea_sib_rsp_index_panics() {
+    let _ = emit_bytes(|b| {
+        emit_lea_sib(b, true, Reg::Rax, Reg::Rcx, Reg::Rsp, 1, 0x10)
+    });
+}
+
+#[test]
+#[should_panic(expected = "SIB scale shift must be in 0..=3")]
+fn lea_sib_shift_out_of_range_panics() {
+    let _ = emit_bytes(|b| {
+        emit_lea_sib(b, true, Reg::Rax, Reg::Rcx, Reg::Rdx, 4, 0x10)
+    });
+}
+
 // ==========================================================
 // Memory arithmetic tests
 // ==========================================================
@@ -1128,6 +1291,13 @@ fn test_bi_al() {
     assert_eq!(code, [0xF6, 0xC0, 0xFF]);
 }
 
+#[test]
+fn test_bi_r12b() {
+    // test r12b, 0x42 => 41 F6 C4 42
+    let code = emit_bytes(|b| emit_test_bi(b, Reg::R12, 0x42));
+    assert_eq!(code, [0x41, 0xF6, 0xC4, 0x42]);
+}
+
 // ==========================================================
 // Memory zero/sign-extend load tests
 // ==========================================================
@@ -1174,6 +1344,13 @@ fn andn_64() {
     // andn rax, rcx, rdx => C4 E2 F0 F2 C2
     let code = emit_bytes(|b| emit_andn(b, true, Reg::Rax, Reg::Rcx, Reg::Rdx));
     assert_eq!(code, [0xC4, 0xE2, 0xF0, 0xF2, 0xC2]);
+}
+
+#[test]
+fn andn_64_extended_regs() {
+    // andn r8, r12, r13 => C4 42 98 F2 C5
+    let code = emit_bytes(|b| emit_andn(b, true, Reg::R8, Reg::R12, Reg::R13));
+    assert_eq!(code, [0xC4, 0x42, 0x98, 0xF2, 0xC5]);
 }
 
 // ==========================================================

@@ -333,6 +333,15 @@ pub fn emit_modrm_sib(
     shift: u8,
     offset: i32,
 ) {
+    assert!(
+        shift <= 3,
+        "SIB scale shift must be in 0..=3 (encoding scale factors 1,2,4,8)"
+    );
+    assert!(
+        index != Reg::Rsp,
+        "RSP cannot be encoded as a SIB index register in x86-64"
+    );
+
     emit_opc_3(buf, opc, r as u8, base as u8, index as u8);
 
     let r3 = r.low3();
@@ -840,24 +849,36 @@ pub fn emit_andn(
 pub fn emit_jcc(buf: &mut CodeBuffer, cond: X86Cond, target_offset: usize) {
     emit_opc(buf, OPC_JCC_long + (cond as u32), 0, 0);
     let after = buf.offset() + 4;
-    let disp = target_offset as i64 - after as i64;
-    buf.emit_u32(disp as u32);
+    let disp = target_offset as i128 - after as i128;
+    assert!(
+        (i32::MIN as i128..=i32::MAX as i128).contains(&disp),
+        "jcc displacement out of i32 range"
+    );
+    buf.emit_u32(disp as i32 as u32);
 }
 
 /// Emit JMP rel32 to absolute offset.
 pub fn emit_jmp(buf: &mut CodeBuffer, target_offset: usize) {
     buf.emit_u8(OPC_JMP_long as u8);
     let after = buf.offset() + 4;
-    let disp = target_offset as i64 - after as i64;
-    buf.emit_u32(disp as u32);
+    let disp = target_offset as i128 - after as i128;
+    assert!(
+        (i32::MIN as i128..=i32::MAX as i128).contains(&disp),
+        "jmp displacement out of i32 range"
+    );
+    buf.emit_u32(disp as i32 as u32);
 }
 
 /// Emit CALL rel32 to absolute offset.
 pub fn emit_call(buf: &mut CodeBuffer, target_offset: usize) {
     buf.emit_u8(OPC_CALL_Jz as u8);
     let after = buf.offset() + 4;
-    let disp = target_offset as i64 - after as i64;
-    buf.emit_u32(disp as u32);
+    let disp = target_offset as i128 - after as i128;
+    assert!(
+        (i32::MIN as i128..=i32::MAX as i128).contains(&disp),
+        "call displacement out of i32 range"
+    );
+    buf.emit_u32(disp as i32 as u32);
 }
 
 /// Emit indirect JMP through register.
