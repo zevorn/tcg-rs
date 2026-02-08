@@ -229,12 +229,10 @@ pub fn emit_opc(buf: &mut CodeBuffer, opc: u32, r: u8, rm: u8) {
     if rm >= 8 {
         rex |= 0x01; // REX.B
     }
-    // P_REXB_R / P_REXB_RM force REX for byte register access (SPL, BPL, etc.)
-    if opc & P_REXB_R != 0 && r >= 4 {
-        rex |= 0; // just need REX prefix present
-        if rex == 0 {
-            rex = 0x40; // force REX
-        }
+    // P_REXB_R / P_REXB_RM force REX for byte register access
+    // (SPL, BPL, SIL, DIL need REX prefix to be accessible)
+    if opc & P_REXB_R != 0 && r >= 4 && rex == 0 {
+        rex = 0x40; // force bare REX
     }
     if opc & P_REXB_RM != 0 && rm >= 4 && rex == 0 {
         rex = 0x40;
