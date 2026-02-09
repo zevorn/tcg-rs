@@ -133,14 +133,16 @@ impl HostCodeGen for X86_64CodeGen {
                 }
             }
             Opcode::Sub => {
-                out_binary_mov(buf, rexw, oregs, iregs);
-                emit_arith_rr(
-                    buf,
-                    ArithOp::Sub,
-                    rexw,
-                    Reg::from_u8(oregs[0]),
-                    Reg::from_u8(iregs[1]),
-                );
+                let d = Reg::from_u8(oregs[0]);
+                let a = Reg::from_u8(iregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                if oregs[0] == iregs[1] && oregs[0] != iregs[0] {
+                    emit_neg(buf, rexw, d);
+                    emit_arith_rr(buf, ArithOp::Add, rexw, d, a);
+                } else {
+                    out_binary_mov(buf, rexw, oregs, iregs);
+                    emit_arith_rr(buf, ArithOp::Sub, rexw, d, b);
+                }
             }
             Opcode::Mul => {
                 if oregs[0] == iregs[1] && oregs[0] != iregs[0] {
@@ -192,7 +194,7 @@ impl HostCodeGen for X86_64CodeGen {
                     emit_arith_rr(buf, ArithOp::Cmp, rexw, a, b);
                 }
                 emit_setcc(buf, x86c, d);
-                emit_movzx(buf, OPC_MOVZBL, d, d);
+                emit_movzx(buf, OPC_MOVZBL | P_REXB_RM, d, d);
             }
             Opcode::BrCond => {
                 let a = Reg::from_u8(iregs[0]);

@@ -374,6 +374,12 @@ fn emit_opc_3(buf: &mut CodeBuffer, opc: u32, r: u8, rm: u8, index: u8) {
     if rm >= 8 {
         rex |= 0x01;
     }
+    if opc & P_REXB_R != 0 && r >= 4 && rex == 0 {
+        rex = 0x40;
+    }
+    if opc & P_REXB_RM != 0 && rm >= 4 && rex == 0 {
+        rex = 0x40;
+    }
 
     if opc & P_DATA16 != 0 {
         buf.emit_u8(0x66);
