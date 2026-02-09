@@ -1,10 +1,12 @@
 pub mod code_buffer;
+pub mod constraint;
 pub mod liveness;
 pub mod regalloc;
 pub mod translate;
 pub mod x86_64;
 
 pub use code_buffer::CodeBuffer;
+pub use constraint::{ArgConstraint, OpConstraint};
 pub use x86_64::X86_64CodeGen;
 
 /// Trait for host architecture code generators.
@@ -37,6 +39,9 @@ pub trait HostCodeGen {
     /// Initialize a translation context with backend-specific
     /// settings (reserved registers, stack frame layout, etc.).
     fn init_context(&self, ctx: &mut tcg_core::Context);
+
+    /// Return the register constraint for an opcode.
+    fn op_constraint(&self, opc: tcg_core::Opcode) -> &'static OpConstraint;
 
     // -- Register allocator primitives --
 

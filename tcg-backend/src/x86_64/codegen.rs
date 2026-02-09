@@ -1,4 +1,5 @@
 use crate::code_buffer::CodeBuffer;
+use crate::constraint::OpConstraint;
 use crate::x86_64::emitter::*;
 use crate::x86_64::regs::{
     Reg, CALLEE_SAVED, CALL_ARG_REGS, STACK_ADDEND, STATIC_CALL_ARGS_SIZE,
@@ -7,6 +8,10 @@ use crate::HostCodeGen;
 use tcg_core::{Cond, Context, Op, Opcode, Type};
 
 impl HostCodeGen for X86_64CodeGen {
+    fn op_constraint(&self, opc: Opcode) -> &'static OpConstraint {
+        crate::x86_64::constraints::op_constraint(opc)
+    }
+
     fn emit_prologue(&mut self, buf: &mut CodeBuffer) {
         self.prologue_offset = buf.offset();
         for &reg in CALLEE_SAVED {

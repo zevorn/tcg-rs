@@ -1,4 +1,5 @@
 pub mod codegen;
+pub mod constraints;
 pub mod emitter;
 pub mod regs;
 
