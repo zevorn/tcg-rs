@@ -332,72 +332,349 @@ type 和 args 布局。
 `tcg_reg_alloc_op()`。MVP 不支持溢出（spill）——14 个可分配
 GPR 对简单 TB 足够。
 
-**状态**：
+#### 4.3.1 架构概述
+
+QEMU 的寄存器分配器 `tcg_reg_alloc_op()`（`tcg/tcg.c`）是完全
+通用的——不含任何 per-opcode 分支。每个 opcode 的特殊需求（如
+SUB 的破坏性语义、SHL 的 RCX 要求）全部通过 `TCGArgConstraint`
+声明式描述，分配器只需读取约束并执行统一逻辑。
+
+tcg-rs 的 `regalloc_op()` 对齐这一架构：
 
 ```
-RegAllocState {
-    reg_to_temp: [Option<TempIdx>; 16],  // 寄存器→临时变量映射
-    free_regs: RegSet,                    // 空闲寄存器位图
-    allocatable: RegSet,                  // 可分配寄存器集合
+                    ┌──────────────┐
+                    │ OpConstraint │  ← backend.op_constraint(opc)
+                    └──────┬───────┘
+                           │
+  ┌────────────────────────▼────────────────────────┐
+  │              regalloc_op() — 通用路径             │
+  │                                                  │
+  │  1. 按约束加载输入  →  2. fixup  →  3. 释放死输入 │
+  │  4. 按约束分配输出  →  5. emit   →  6. 释放死输出 │
+  │                        7. sync globals           │
+  └──────────────────────────────────────────────────┘
+```
+
+这意味着新增 opcode 时只需在约束表中添加一行，分配器和 codegen
+无需任何修改。
+
+#### 4.3.2 分配器状态
+
+```rust
+struct RegAllocState {
+    reg_to_temp: [Option<TempIdx>; 16],
+    free_regs: RegSet,
+    allocatable: RegSet,
 }
 ```
 
-**主循环（`regalloc_and_codegen`）**：
-
-对每个 op 按类型分派：
-
-| Op 类型 | 处理策略 |
-|---------|---------|
-| Nop/InsnStart | 跳过 |
-| Mov | 加载源→分配目标→emit host mov（寄存器重命名优化） |
-| SetLabel | sync globals → 解析 label → back-patch 前向引用 |
-| Br | sync globals → emit jmp（前向引用记录 patch 位置） |
-| BrCond | 约束加载输入→sync globals→emit cmp+jcc→记录前向引用 |
-| ExitTb/GotoTb | sync globals → 委托 `tcg_out_op` |
-| **通用 op** | **`regalloc_op()` — 约束驱动通用路径** |
-
-**通用 op 处理流程（`regalloc_op`）**：
-
-```
-1. Process inputs:
-   for each input i:
-     if ialias && dead && !readonly:
-       load into required regs, prefer output_pref → mark reusable
-     else:
-       load into required regs, forbidden = already allocated
-
-2. Fixup: re-read i_regs after all inputs
-   (eviction of earlier inputs by later fixed constraints)
-
-3. Free dead inputs
-
-4. Process outputs:
-   for each output k:
-     if oalias && input reusable: reuse input's register
-     if oalias && input live: copy input away, take its register
-     if newreg: allocate from required & ~(i_allocated | o_allocated)
-     else: allocate from required & ~o_allocated
-
-5. Emit host code: backend.tcg_out_op(buf, op, oregs, iregs, cargs)
-
-6. Free dead outputs, sync globals at BB boundaries
-```
-
-**关键辅助函数**：
-
-| 函数 | 用途 |
+| 字段 | 含义 |
 |------|------|
-| `evict_reg()` | 驱逐寄存器占用者：全局→sync+Mem；局部→mov 到空闲寄存器 |
-| `reg_alloc()` | 从 `required & ~forbidden` 分配，优先 preferred；含强制驱逐回退 |
-| `temp_load_to()` | 加载 temp 到满足约束的寄存器（Const→movi，Mem→ld，Reg→mov if needed） |
-| `temp_sync()` | 将全局变量写回内存（`tcg_out_st`） |
-| `sync_globals()` | 在 BB 边界同步所有活跃全局变量 |
-| `temp_dead()` | 释放死亡 temp 的寄存器（全局/固定 temp 不释放） |
+| `reg_to_temp` | 16 个宿主寄存器各自映射到哪个 temp（None=空闲） |
+| `free_regs` | 当前空闲且可分配的寄存器位图 |
+| `allocatable` | 可分配寄存器集合（不变，排除 RSP/RBP） |
 
-**强制驱逐**：当 `required & ~forbidden` 为空时（如 input0 占据
-RCX 而 input1 的固定约束要求 RCX），`reg_alloc()` 忽略 forbidden
-集合，强制驱逐占用者。配合 fixup 阶段重新读取 `i_regs`，确保被
-驱逐的 input 的新位置被正确记录。
+**初始化**：`free_regs = allocatable`，然后遍历所有 Fixed temp
+（如 env/RBP），将其标记为已占用（`assign(reg, tidx)`）。
+
+**Temp 状态机**：每个 `Temp` 有 `val_type` 字段追踪其当前位置：
+
+```
+                  temp_load_to()
+    ┌──────┐    ┌──────────────┐    ┌─────┐
+    │ Dead │───→│ Const / Mem  │───→│ Reg │
+    └──────┘    └──────────────┘    └──┬──┘
+       ↑                               │
+       └───────── temp_dead() ─────────┘
+                                  (局部 temp)
+```
+
+- **Dead**：未分配，不占用任何资源
+- **Const**：编译期常量，需要 `movi` 加载到寄存器
+- **Mem**：全局变量在内存中，需要 `ld` 加载到寄存器
+- **Reg**：已在宿主寄存器中，可直接使用
+
+全局变量和固定 temp 不会进入 Dead 状态——`temp_dead()` 对
+它们是 no-op。
+
+#### 4.3.3 主循环分派
+
+`regalloc_and_codegen()` 前向遍历 ops 列表，按 opcode 分派：
+
+| Op 类型 | 处理策略 | 原因 |
+|---------|---------|------|
+| Nop/InsnStart | 跳过 | 无代码生成 |
+| Mov | 专用路径 | 寄存器重命名优化（QEMU 也单独处理） |
+| SetLabel | sync → 解析 label → back-patch | 控制流汇合点 |
+| Br | sync → emit jmp | 无条件跳转 |
+| BrCond | 约束加载 → sync → emit cmp+jcc | 需要 sync 在 emit 之前 |
+| ExitTb/GotoTb | sync → 委托 tcg_out_op | TB 退出 |
+| **其他** | **`regalloc_op()`** | **通用约束驱动路径** |
+
+**为什么 BrCond 不走通用路径？** 因为 BrCond 需要在 emit 之前
+sync globals（分支目标可能是另一个 BB），而通用路径的 sync 在
+emit 之后。此外 BrCond 的前向引用需要在 emit 之后记录
+`label.add_use()`。
+
+#### 4.3.4 通用 op 处理流程（`regalloc_op`）
+
+以 `Sub t3, t1, t2`（约束 `o1_i2_alias`）为例，详细说明
+7 个阶段：
+
+**阶段 1：处理输入**
+
+```
+for i in 0..nb_iargs:
+    arg_ct = ct.args[nb_oargs + i]
+    tidx   = op.args[nb_oargs + i]
+    required  = arg_ct.regs       // 允许的寄存器集合
+    forbidden = i_allocated       // 已分配给前面输入的寄存器
+
+    if arg_ct.ialias && is_dead(input) && !is_readonly(temp):
+        // 输入死亡且可写 → 可以复用其寄存器给输出
+        preferred = op.output_pref[alias_index]
+        reg = temp_load_to(tidx, required, forbidden, preferred)
+        i_reusable[i] = true
+    else:
+        reg = temp_load_to(tidx, required, forbidden, EMPTY)
+
+    i_regs[i] = reg
+    i_allocated |= reg
+```
+
+关键点：
+- `forbidden` 累积确保不同输入分配到不同寄存器
+- `ialias` 输入优先加载到输出偏好的寄存器（减少后续 mov）
+- `is_readonly` 检查：全局变量、固定 temp、常量不可复用
+
+**阶段 2：Fixup（重新读取 i_regs）**
+
+```
+i_allocated = EMPTY
+for i in 0..nb_iargs:
+    reg = ctx.temp(op.args[nb_oargs + i]).reg
+    i_regs[i] = reg
+    i_allocated |= reg
+```
+
+**为什么需要 fixup？** 当后面的输入分配触发驱逐时，前面输入
+的寄存器可能已经改变。典型场景：
+
+```
+Shl t3, t1, t2  (约束: o1_i2_alias_fixed(R, R, RCX))
+
+假设 t1 当前在 RCX，t2 当前在 RAX：
+  input 0 (t1): ialias, required=R → 加载到 RCX, i_regs[0]=RCX
+  input 1 (t2): fixed=RCX, required={RCX}
+    → required & ~forbidden = {RCX} & ~{RCX} = EMPTY
+    → 强制驱逐 RCX 的占用者 (t1)
+    → evict_reg: t1 是局部 → mov t1 到空闲寄存器 (如 RDX)
+    → t2 加载到 RCX, i_regs[1]=RCX
+
+此时 i_regs[0] 仍然是 RCX（过时！），但 t1 实际在 RDX。
+fixup 阶段重新读取：i_regs[0] = RDX（正确）。
+```
+
+**阶段 3：释放死亡输入**
+
+```
+for i in 0..nb_iargs:
+    if life.is_dead(nb_oargs + i):
+        temp_dead(op.args[nb_oargs + i])
+```
+
+释放死亡输入的寄存器，使其可用于输出分配。注意全局变量和
+固定 temp 的 `temp_dead()` 是 no-op。
+
+**阶段 4：处理输出**
+
+```
+for k in 0..nb_oargs:
+    arg_ct = ct.args[k]
+    dst_tidx = op.args[k]
+
+    if arg_ct.oalias:
+        ai = arg_ct.alias_index
+        if i_reusable[ai]:
+            // 输入已死亡 → 直接复用其寄存器
+            reg = i_regs[ai]
+        else:
+            // 输入仍活跃 → 复制输入到新寄存器，
+            // 输出占据原寄存器
+            old_reg = i_regs[ai]
+            copy_reg = reg_alloc(allocatable,
+                                 i_allocated | o_allocated,
+                                 EMPTY)
+            emit mov(copy_reg, old_reg)
+            // 更新输入 temp 指向 copy_reg
+            reg = old_reg
+
+    elif arg_ct.newreg:
+        // 输出不得与任何输入重叠
+        reg = reg_alloc(required,
+                        i_allocated | o_allocated,
+                        EMPTY)
+    else:
+        // 普通输出
+        reg = reg_alloc(required, o_allocated, EMPTY)
+
+    assign(reg, dst_tidx)
+    o_regs[k] = reg
+    o_allocated |= reg
+```
+
+**oalias copy-away 示例**：
+
+```
+Sub t3, t1, t2  (oalias: output aliases input 0)
+
+假设 t1 仍然活跃（后续还有使用）：
+  → t1 在 RAX，t2 在 RBX
+  → 不能直接复用 RAX（t1 还活着）
+  → copy_reg = 分配空闲寄存器 (如 RCX)
+  → emit: mov RCX, RAX  (t1 的值保存到 RCX)
+  → t1.reg = RCX
+  → output t3 占据 RAX (原 t1 的寄存器)
+  → emit: sub RAX, RBX  (RAX = RAX - RBX)
+```
+
+**阶段 5：发射宿主代码**
+
+```
+backend.tcg_out_op(buf, ctx, op, &o_regs, &i_regs, &cargs)
+```
+
+此时所有约束已满足：
+- oalias 输出与对应输入在同一寄存器
+- 固定约束的输入在指定寄存器（如 RCX）
+- newreg 输出不与任何输入重叠
+
+codegen 可以直接发射最简指令序列。
+
+**阶段 6：释放死亡输出**
+
+```
+for k in 0..nb_oargs:
+    if life.is_dead(k):
+        temp_dead(op.args[k])
+```
+
+**阶段 7：同步全局变量**
+
+```
+for i in 0..nb_iargs:
+    if life.is_sync(nb_oargs + i):
+        temp_sync(op.args[nb_oargs + i])
+```
+
+活跃性分析标记了哪些全局变量在此 op 后需要同步回内存。
+
+#### 4.3.5 寄存器分配策略（`reg_alloc`）
+
+`reg_alloc(required, forbidden, preferred)` 使用 4 级优先策略：
+
+```
+candidates = required & allocatable & ~forbidden
+
+1. preferred & candidates & free_regs  → 最优：偏好且空闲
+2. candidates & free_regs              → 次优：任意空闲
+3. candidates.first()                  → 驱逐：evict 占用者
+4. (required & allocatable).first()    → 强制驱逐（见 4.3.6）
+```
+
+第 1 级的 `preferred` 来自 `op.output_pref`，由活跃性分析
+设置，用于减少 ialias 输入到输出之间的 mov。
+
+#### 4.3.6 驱逐机制（`evict_reg`）
+
+当需要的寄存器被占用时，驱逐占用者：
+
+| 占用者类型 | 驱逐策略 |
+|-----------|---------|
+| 全局变量 | `temp_sync` 写回内存 → 标记 `Mem` → 释放寄存器 |
+| 局部 temp | `mov` 到另一个空闲寄存器 → 更新映射 |
+| 固定 temp | 不应发生（固定 temp 的寄存器不在 allocatable 中） |
+
+**强制驱逐**：当 `candidates` 为空（所有满足约束的寄存器都在
+forbidden 中），说明存在固定约束冲突。此时忽略 forbidden 集合，
+从 `required & allocatable` 中选择并驱逐。这只在固定约束场景
+发生（如 input0 占据 RCX，input1 要求 RCX）。
+
+驱逐后，被驱逐的 temp 的 `reg` 字段已更新，但调用者的
+`i_regs[]` 数组仍持有旧值。这就是 fixup 阶段存在的原因。
+
+#### 4.3.7 具体示例：Shl 的完整分配流程
+
+```
+IR:  Shl t3, t1, t2   (I64)
+约束: o1_i2_alias_fixed(R, R, RCX)
+  args[0] = t3 (output, oalias input 0)
+  args[1] = t1 (input, ialias output 0)
+  args[2] = t2 (input, fixed RCX)
+
+初始状态: t1 在 RAX, t2 在 RBX, t1 和 t2 均在此 op 后死亡
+```
+
+**Step 1 — 处理输入**：
+
+```
+input 0 (t1): ialias=true, dead=true, !readonly
+  required = R (所有可分配寄存器)
+  forbidden = EMPTY
+  preferred = output_pref[0]
+  → t1 已在 RAX (满足 required) → i_regs[0] = RAX
+  → i_reusable[0] = true
+  → i_allocated = {RAX}
+
+input 1 (t2): fixed RCX
+  required = {RCX}
+  forbidden = {RAX}
+  → required & ~forbidden = {RCX} (RCX 空闲)
+  → t2 在 RBX，不满足 required
+  → temp_load_to: emit mov RCX, RBX
+  → i_regs[1] = RCX
+  → i_allocated = {RAX, RCX}
+```
+
+**Step 2 — Fixup**：
+
+```
+重新读取: t1.reg = RAX ✓, t2.reg = RCX ✓
+（本例无冲突，fixup 无变化）
+```
+
+**Step 3 — 释放死亡输入**：
+
+```
+t1 dead → temp_dead(t1): 释放 RAX（但 oalias 会复用）
+t2 dead → temp_dead(t2): 释放 RCX
+```
+
+**Step 4 — 处理输出**：
+
+```
+output 0 (t3): oalias, alias_index=0
+  i_reusable[0] = true → reg = i_regs[0] = RAX
+  → assign(RAX, t3)
+  → o_regs[0] = RAX
+```
+
+**Step 5 — Emit**：
+
+```
+backend.tcg_out_op(Shl, oregs=[RAX], iregs=[RAX, RCX])
+  → emit: shl RAX, cl    (一条指令，无需 mov/push/pop)
+```
+
+#### 4.3.8 与 QEMU 的差异
+
+| 方面 | QEMU | tcg-rs |
+|------|------|--------|
+| 溢出 | 支持溢出到栈帧 `CPU_TEMP_BUF` | 不支持（14 GPR 足够） |
+| 立即数约束 | `re`/`ri` 允许立即数直接编码 | 所有输入必须在寄存器中 |
+| 输出偏好 | `output_pref` 由约束系统设置 | 由活跃性分析设置 |
+| 常量输入 | 可内联到指令编码 | 必须先 `movi` 到寄存器 |
+| 内存输入 | 部分指令支持 `[mem]` 操作数 | 必须先 `ld` 到寄存器 |
 
 ### 4.4 流水线编排 (`translate.rs`)
 
