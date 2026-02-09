@@ -4,9 +4,9 @@
 
 ```
 tcg-rs/
-├── tcg-core/       # IR 定义层：纯数据结构，零依赖
-├── tcg-backend/    # 代码生成层：依赖 tcg-core + libc
-└── tcg-tests/      # 测试层：依赖 tcg-core + tcg-backend
+├── core/           # IR 定义层：纯数据结构，零依赖
+├── backend/        # 代码生成层：依赖 tcg-core + libc
+└── tests/          # 测试层：依赖 tcg-core + tcg-backend
 ```
 
 **设计意图**：遵循 QEMU 的 `include/tcg/` (定义) 与 `tcg/` (实现) 分离原则。`tcg-core` 是纯粹的数据定义，不包含任何平台相关代码或 `unsafe`，未来的 `tcg-ir`、`tcg-opt`、`tcg-frontend` 都只需依赖 `tcg-core`。测试独立成 crate 是为了保持源码文件干净，且外部 crate 测试能验证公共 API 的完整性。
@@ -703,7 +703,7 @@ translate_and_execute():
 
 ### 4.5 端到端集成测试
 
-`tcg-tests/src/integration/mod.rs` 使用最小 RISC-V CPU 状态
+`tests/src/integration/mod.rs` 使用最小 RISC-V CPU 状态
 验证完整流水线：
 
 ```rust
@@ -748,37 +748,37 @@ backed by `RiscvCpuState` 字段。
 
 | QEMU C 结构/概念               | Rust 对应                       | 文件                                 |
 |-------------------------------|--------------------------------|-------------------------------------|
-| `TCGType`                     | `enum Type`                    | `tcg-core/src/types.rs`             |
-| `TCGTempVal`                  | `enum TempVal`                 | `tcg-core/src/types.rs`             |
-| `TCGCond`                     | `enum Cond`                    | `tcg-core/src/types.rs`             |
-| `MemOp`                       | `struct MemOp(u16)`            | `tcg-core/src/types.rs`             |
-| `TCGRegSet`                   | `struct RegSet(u64)`           | `tcg-core/src/types.rs`             |
-| `TCGOpcode` + DEF macros      | `enum Opcode`                  | `tcg-core/src/opcode.rs`            |
-| `TCGOpDef`                    | `struct OpDef` + `OPCODE_DEFS` | `tcg-core/src/opcode.rs`            |
-| `TCG_OPF_*`                   | `struct OpFlags`               | `tcg-core/src/opcode.rs`            |
-| `TCGTempKind`                 | `enum TempKind`                | `tcg-core/src/temp.rs`              |
-| `TCGTemp`                     | `struct Temp`                  | `tcg-core/src/temp.rs`              |
-| `TCGLabel`                    | `struct Label`                 | `tcg-core/src/label.rs`             |
-| `TCGLifeData`                 | `struct LifeData(u32)`         | `tcg-core/src/op.rs`                |
-| `TCGOp`                       | `struct Op`                    | `tcg-core/src/op.rs`                |
-| `TCGContext`                  | `struct Context`               | `tcg-core/src/context.rs`           |
-| `TranslationBlock`            | `struct TranslationBlock`      | `tcg-core/src/tb.rs`                |
-| `CPUJumpCache`                | `struct JumpCache`             | `tcg-core/src/tb.rs`                |
-| `tcg_target_callee_save_regs` | `CALLEE_SAVED`                 | `tcg-backend/src/x86_64/regs.rs`    |
-| `tcg_out_tb_start` (prologue) | `HostCodeGen::emit_prologue`   | `tcg-backend/src/x86_64/emitter.rs` |
-| `tcg_code_gen_epilogue`       | `HostCodeGen::emit_epilogue`   | `tcg-backend/src/x86_64/emitter.rs` |
-| `tcg_out_exit_tb`             | `X86_64CodeGen::emit_exit_tb`  | `tcg-backend/src/x86_64/emitter.rs` |
-| `tcg_out_goto_tb`             | `X86_64CodeGen::emit_goto_tb`  | `tcg-backend/src/x86_64/emitter.rs` |
-| `tcg_out_goto_ptr`            | `X86_64CodeGen::emit_goto_ptr` | `tcg-backend/src/x86_64/emitter.rs` |
-| `tcg_gen_op*` (IR emission)   | `Context::gen_*`               | `tcg-core/src/ir_builder.rs`        |
-| `liveness_pass_1`             | `liveness_analysis()`          | `tcg-backend/src/liveness.rs`       |
-| `tcg_reg_alloc_op`            | `regalloc_op()`                | `tcg-backend/src/regalloc.rs`       |
-| `TCGArgConstraint`            | `ArgConstraint`                | `tcg-backend/src/constraint.rs`     |
-| `C_O*_I*` macros              | `o1_i2()` / `o1_i2_alias()` etc. | `tcg-backend/src/constraint.rs`  |
-| `tcg_target_op_def`           | `op_constraint()`              | `tcg-backend/src/x86_64/constraints.rs` |
-| `tcg_out_op` (dispatch)       | `HostCodeGen::tcg_out_op`      | `tcg-backend/src/x86_64/codegen.rs` |
-| `tcg_out_mov`                 | `HostCodeGen::tcg_out_mov`     | `tcg-backend/src/x86_64/codegen.rs` |
-| `tcg_out_movi`                | `HostCodeGen::tcg_out_movi`    | `tcg-backend/src/x86_64/codegen.rs` |
-| `tcg_out_ld`                  | `HostCodeGen::tcg_out_ld`      | `tcg-backend/src/x86_64/codegen.rs` |
-| `tcg_out_st`                  | `HostCodeGen::tcg_out_st`      | `tcg-backend/src/x86_64/codegen.rs` |
-| `tcg_gen_code`                | `translate()`                  | `tcg-backend/src/translate.rs`      |
+| `TCGType`                     | `enum Type`                    | `core/src/types.rs`             |
+| `TCGTempVal`                  | `enum TempVal`                 | `core/src/types.rs`             |
+| `TCGCond`                     | `enum Cond`                    | `core/src/types.rs`             |
+| `MemOp`                       | `struct MemOp(u16)`            | `core/src/types.rs`             |
+| `TCGRegSet`                   | `struct RegSet(u64)`           | `core/src/types.rs`             |
+| `TCGOpcode` + DEF macros      | `enum Opcode`                  | `core/src/opcode.rs`            |
+| `TCGOpDef`                    | `struct OpDef` + `OPCODE_DEFS` | `core/src/opcode.rs`            |
+| `TCG_OPF_*`                   | `struct OpFlags`               | `core/src/opcode.rs`            |
+| `TCGTempKind`                 | `enum TempKind`                | `core/src/temp.rs`              |
+| `TCGTemp`                     | `struct Temp`                  | `core/src/temp.rs`              |
+| `TCGLabel`                    | `struct Label`                 | `core/src/label.rs`             |
+| `TCGLifeData`                 | `struct LifeData(u32)`         | `core/src/op.rs`                |
+| `TCGOp`                       | `struct Op`                    | `core/src/op.rs`                |
+| `TCGContext`                  | `struct Context`               | `core/src/context.rs`           |
+| `TranslationBlock`            | `struct TranslationBlock`      | `core/src/tb.rs`                |
+| `CPUJumpCache`                | `struct JumpCache`             | `core/src/tb.rs`                |
+| `tcg_target_callee_save_regs` | `CALLEE_SAVED`                 | `backend/src/x86_64/regs.rs`    |
+| `tcg_out_tb_start` (prologue) | `HostCodeGen::emit_prologue`   | `backend/src/x86_64/emitter.rs` |
+| `tcg_code_gen_epilogue`       | `HostCodeGen::emit_epilogue`   | `backend/src/x86_64/emitter.rs` |
+| `tcg_out_exit_tb`             | `X86_64CodeGen::emit_exit_tb`  | `backend/src/x86_64/emitter.rs` |
+| `tcg_out_goto_tb`             | `X86_64CodeGen::emit_goto_tb`  | `backend/src/x86_64/emitter.rs` |
+| `tcg_out_goto_ptr`            | `X86_64CodeGen::emit_goto_ptr` | `backend/src/x86_64/emitter.rs` |
+| `tcg_gen_op*` (IR emission)   | `Context::gen_*`               | `core/src/ir_builder.rs`        |
+| `liveness_pass_1`             | `liveness_analysis()`          | `backend/src/liveness.rs`       |
+| `tcg_reg_alloc_op`            | `regalloc_op()`                | `backend/src/regalloc.rs`       |
+| `TCGArgConstraint`            | `ArgConstraint`                | `backend/src/constraint.rs`     |
+| `C_O*_I*` macros              | `o1_i2()` / `o1_i2_alias()` etc. | `backend/src/constraint.rs`  |
+| `tcg_target_op_def`           | `op_constraint()`              | `backend/src/x86_64/constraints.rs` |
+| `tcg_out_op` (dispatch)       | `HostCodeGen::tcg_out_op`      | `backend/src/x86_64/codegen.rs` |
+| `tcg_out_mov`                 | `HostCodeGen::tcg_out_mov`     | `backend/src/x86_64/codegen.rs` |
+| `tcg_out_movi`                | `HostCodeGen::tcg_out_movi`    | `backend/src/x86_64/codegen.rs` |
+| `tcg_out_ld`                  | `HostCodeGen::tcg_out_ld`      | `backend/src/x86_64/codegen.rs` |
+| `tcg_out_st`                  | `HostCodeGen::tcg_out_st`      | `backend/src/x86_64/codegen.rs` |
+| `tcg_gen_code`                | `translate()`                  | `backend/src/translate.rs`      |

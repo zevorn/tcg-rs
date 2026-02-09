@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-`tcg-backend/src/x86_64/emitter.rs` 实现了 x86-64 宿主架构的完整 GPR 指令编码器，参考 QEMU 的 `tcg/i386/tcg-target.c.inc`。采用分层编码架构：
+`backend/src/x86_64/emitter.rs` 实现了 x86-64 宿主架构的完整 GPR 指令编码器，参考 QEMU 的 `tcg/i386/tcg-target.c.inc`。采用分层编码架构：
 
 ```
 前缀标志 (P_*) + 操作码常量 (OPC_*)
