@@ -181,13 +181,54 @@ trait HostCodeGen {
     fn patch_jump(&mut self, buf: &mut CodeBuffer, jump_offset, target_offset);
     fn epilogue_offset(&self) -> usize;
     fn init_context(&self, ctx: &mut Context);
+    fn op_constraint(&self, opc: Opcode) -> &'static OpConstraint;
+    // + register allocator primitives: tcg_out_mov/movi/ld/st/op
 }
 ```
 
 - Trait-based 而非条件编译，允许同一二进制支持多后端（测试/模拟场景）
 - `init_context()` 让后端向 Context 注入平台特定配置（保留寄存器、栈帧布局）
+- `op_constraint()` 返回每个 opcode 的寄存器约束，供通用寄存器分配器消费（见 3.3）
 
-### 3.3 x86-64 栈帧布局 (`regs.rs`)
+### 3.3 约束系统 (`constraint.rs`)
+
+```rust
+struct ArgConstraint {
+    regs: RegSet,       // allowed registers
+    oalias: bool,       // output aliases an input
+    ialias: bool,       // input is aliased to an output
+    alias_index: u8,    // which arg it aliases
+    newreg: bool,       // output must not overlap any input
+}
+
+struct OpConstraint {
+    args: [ArgConstraint; MAX_OP_ARGS],
+}
+```
+
+声明式描述每个 opcode 的寄存器分配需求，对齐 QEMU 的 `TCGArgConstraint` + `C_O*_I*` 宏系统。
+
+**约束类型**：
+
+| 约束 | 含义 | QEMU 等价 | 典型用途 |
+|------|------|-----------|---------|
+| `oalias` | 输出复用输入的寄存器 | `"0"` (alias) | 破坏性二元运算 (SUB/AND/...) |
+| `ialias` | 输入可被输出复用 | 对应 oalias 的输入端 | 与 oalias 配对 |
+| `newreg` | 输出不得与任何输入重叠 | `"&"` (newreg) | SetCond (setcc 只写低字节) |
+| `fixed` | 单寄存器约束 | `"c"` (RCX) | 移位计数必须在 RCX |
+
+**Builder 函数**：
+
+| 函数 | 签名 | 用途 |
+|------|------|------|
+| `o1_i2(o0, i0, i1)` | 三地址 | Add (LEA) |
+| `o1_i2_alias(o0, i0, i1)` | 输出别名 input0 | Sub/Mul/And/Or/Xor |
+| `o1_i1_alias(o0, i0)` | 一元别名 | Neg/Not |
+| `o1_i2_alias_fixed(o0, i0, reg)` | 别名 + 固定 | Shl/Shr/Sar (RCX) |
+| `n1_i2(o0, i0, i1)` | newreg 输出 | SetCond |
+| `o0_i2(i0, i1)` | 无输出 | BrCond/St |
+
+### 3.4 x86-64 栈帧布局 (`regs.rs`)
 
 ```
 高地址
@@ -213,7 +254,7 @@ trait HostCodeGen {
 - `FRAME_SIZE` 编译期计算并 16 字节对齐，满足 System V ABI 要求
 - `TCG_AREG0 = RBP`：env 指针固定在 RBP，匹配 QEMU 约定。所有 TB 代码通过 RBP 访问 CPUState
 
-### 3.4 Prologue/Epilogue (`emitter.rs`)
+### 3.5 Prologue/Epilogue (`emitter.rs`)
 
 **Prologue**:
 
@@ -229,7 +270,7 @@ trait HostCodeGen {
 
 这个双入口设计避免了 `exit_tb(0)` 时多余的 `mov rax, 0` 指令。
 
-### 3.5 TB 控制流指令
+### 3.6 TB 控制流指令
 
 - **`exit_tb(val)`**：val==0 时直接 `jmp epilogue_return_zero`；否则 `mov rax, val` + `jmp tb_ret`
 - **`goto_tb`**：发射 `E9 00000000`（JMP rel32），NOP 填充确保 disp32 字段 4 字节对齐，使得 TB chaining 时的原子修补是安全的
@@ -287,8 +328,9 @@ type 和 args 布局。
 
 ### 4.3 寄存器分配器 (`regalloc.rs`)
 
-贪心逐 op 分配器，前向遍历 ops 列表。MVP 不支持溢出（spill）
-——14 个可分配 GPR 对简单 TB 足够。
+约束驱动的贪心逐 op 分配器，前向遍历 ops 列表，对齐 QEMU 的
+`tcg_reg_alloc_op()`。MVP 不支持溢出（spill）——14 个可分配
+GPR 对简单 TB 足够。
 
 **状态**：
 
@@ -307,20 +349,55 @@ RegAllocState {
 | Op 类型 | 处理策略 |
 |---------|---------|
 | Nop/InsnStart | 跳过 |
-| Mov | 加载源→分配目标→emit host mov |
+| Mov | 加载源→分配目标→emit host mov（寄存器重命名优化） |
 | SetLabel | sync globals → 解析 label → back-patch 前向引用 |
 | Br | sync globals → emit jmp（前向引用记录 patch 位置） |
-| BrCond | 加载输入→sync globals→emit cmp+jcc→记录前向引用 |
+| BrCond | 约束加载输入→sync globals→emit cmp+jcc→记录前向引用 |
 | ExitTb/GotoTb | sync globals → 委托 `tcg_out_op` |
-| 通用 op | 加载输入→释放死亡输入→分配输出→`tcg_out_op`→释放死亡输出 |
+| **通用 op** | **`regalloc_op()` — 约束驱动通用路径** |
+
+**通用 op 处理流程（`regalloc_op`）**：
+
+```
+1. Process inputs:
+   for each input i:
+     if ialias && dead && !readonly:
+       load into required regs, prefer output_pref → mark reusable
+     else:
+       load into required regs, forbidden = already allocated
+
+2. Fixup: re-read i_regs after all inputs
+   (eviction of earlier inputs by later fixed constraints)
+
+3. Free dead inputs
+
+4. Process outputs:
+   for each output k:
+     if oalias && input reusable: reuse input's register
+     if oalias && input live: copy input away, take its register
+     if newreg: allocate from required & ~(i_allocated | o_allocated)
+     else: allocate from required & ~o_allocated
+
+5. Emit host code: backend.tcg_out_op(buf, op, oregs, iregs, cargs)
+
+6. Free dead outputs, sync globals at BB boundaries
+```
 
 **关键辅助函数**：
 
-- `temp_load()`：确保 temp 在寄存器中（Const→movi，Mem→ld，Reg→noop）
-- `temp_sync()`：将全局变量写回内存（`tcg_out_st`）
-- `sync_globals()`：在 BB 边界同步所有活跃全局变量
-- `temp_dead()`：释放死亡 temp 的寄存器（全局/固定 temp 不释放）
-- `temp_alloc_output()`：为输出 temp 分配新寄存器
+| 函数 | 用途 |
+|------|------|
+| `evict_reg()` | 驱逐寄存器占用者：全局→sync+Mem；局部→mov 到空闲寄存器 |
+| `reg_alloc()` | 从 `required & ~forbidden` 分配，优先 preferred；含强制驱逐回退 |
+| `temp_load_to()` | 加载 temp 到满足约束的寄存器（Const→movi，Mem→ld，Reg→mov if needed） |
+| `temp_sync()` | 将全局变量写回内存（`tcg_out_st`） |
+| `sync_globals()` | 在 BB 边界同步所有活跃全局变量 |
+| `temp_dead()` | 释放死亡 temp 的寄存器（全局/固定 temp 不释放） |
+
+**强制驱逐**：当 `required & ~forbidden` 为空时（如 input0 占据
+RCX 而 input1 的固定约束要求 RCX），`reg_alloc()` 忽略 forbidden
+集合，强制驱逐占用者。配合 fixup 阶段重新读取 `i_regs`，确保被
+驱逐的 input 的新位置被正确记录。
 
 ### 4.4 流水线编排 (`translate.rs`)
 
@@ -418,7 +495,10 @@ backed by `RiscvCpuState` 字段。
 | `tcg_out_goto_ptr`            | `X86_64CodeGen::emit_goto_ptr` | `tcg-backend/src/x86_64/emitter.rs` |
 | `tcg_gen_op*` (IR emission)   | `Context::gen_*`               | `tcg-core/src/ir_builder.rs`        |
 | `liveness_pass_1`             | `liveness_analysis()`          | `tcg-backend/src/liveness.rs`       |
-| `tcg_reg_alloc_op`            | `regalloc_and_codegen()`       | `tcg-backend/src/regalloc.rs`       |
+| `tcg_reg_alloc_op`            | `regalloc_op()`                | `tcg-backend/src/regalloc.rs`       |
+| `TCGArgConstraint`            | `ArgConstraint`                | `tcg-backend/src/constraint.rs`     |
+| `C_O*_I*` macros              | `o1_i2()` / `o1_i2_alias()` etc. | `tcg-backend/src/constraint.rs`  |
+| `tcg_target_op_def`           | `op_constraint()`              | `tcg-backend/src/x86_64/constraints.rs` |
 | `tcg_out_op` (dispatch)       | `HostCodeGen::tcg_out_op`      | `tcg-backend/src/x86_64/codegen.rs` |
 | `tcg_out_mov`                 | `HostCodeGen::tcg_out_mov`     | `tcg-backend/src/x86_64/codegen.rs` |
 | `tcg_out_movi`                | `HostCodeGen::tcg_out_movi`    | `tcg-backend/src/x86_64/codegen.rs` |

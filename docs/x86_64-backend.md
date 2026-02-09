@@ -187,12 +187,37 @@ x86-64 ModR/M 编码有两个特殊寄存器需要额外处理：
 
 `X86Cond::invert()` 通过翻转低位实现条件取反（如 Je ↔ Jne）。
 
-## 6. Codegen 分派 (`codegen.rs`)
+## 6. 约束表 (`constraints.rs`)
+
+`op_constraint()` 为每个 opcode 返回静态 `OpConstraint`，对齐
+QEMU 的 `tcg_target_op_def()`（`tcg/i386/tcg-target.c.inc`）。
+
+| Opcode | 约束 | QEMU 等价 | 说明 |
+|--------|------|-----------|------|
+| Add | `o1_i2(R, R, R)` | `C_O1_I2(r,r,re)` | 三地址 LEA |
+| Sub | `o1_i2_alias(R, R, R)` | `C_O1_I2(r,0,re)` | 破坏性 SUB，dst==lhs |
+| Mul | `o1_i2_alias(R, R, R)` | `C_O1_I2(r,0,r)` | IMUL 二地址 |
+| And/Or/Xor | `o1_i2_alias(R, R, R)` | `C_O1_I2(r,0,re)` | 破坏性二元运算 |
+| Neg/Not | `o1_i1_alias(R, R)` | `C_O1_I1(r,0)` | 原地一元运算 |
+| Shl/Shr/Sar | `o1_i2_alias_fixed(R, R, RCX)` | `C_O1_I2(r,0,ci)` | 别名 + count 固定 RCX |
+| SetCond | `n1_i2(R, R, R)` | `C_N1_I2(r,r,re)` | newreg（setcc 只写低字节） |
+| BrCond | `o0_i2(R, R)` | `C_O0_I2(r,re)` | 无输出 |
+| Ld | `o1_i1(R, R)` | — | 无别名 |
+| St | `o0_i2(R, R)` | — | 无输出 |
+
+其中 `R = ALLOCATABLE_REGS`（14 个 GPR，排除 RSP 和 RBP）。
+
+约束保证使 codegen 可以假设：
+- 破坏性运算的 `oregs[0] == iregs[0]`（无需 mov 前置）
+- 移位的 `iregs[1] == RCX`（无需 push/pop RCX 杂耍）
+- SetCond 的输出不与任何输入重叠
+
+## 7. Codegen 分派 (`codegen.rs`)
 
 `tcg_out_op` 是寄存器分配器与指令编码器之间的桥梁。它接收已分配
 宿主寄存器的 IR op，将其翻译为一个或多个 x86-64 指令。
 
-### 6.1 HostCodeGen 寄存器分配器原语
+### 7.1 HostCodeGen 寄存器分配器原语
 
 | 方法 | 用途 |
 |------|------|
@@ -201,38 +226,33 @@ x86-64 ModR/M 编码有两个特殊寄存器需要额外处理：
 | `tcg_out_ld(ty, dst, base, offset)` | 从内存加载（全局变量 reload） |
 | `tcg_out_st(ty, src, base, offset)` | 存储到内存（全局变量 sync） |
 
-### 6.2 IR Opcode → x86-64 指令映射
+### 7.2 IR Opcode → x86-64 指令映射
 
-| IR Opcode | x86-64 策略 |
-|-----------|------------|
-| Add | d==a: `add d,b`; d==b: `add d,a`; else: `lea d,[a+b]` |
-| Sub | mov d←a if needed; `sub d,b` |
-| Mul | mov d←a if needed; `imul d,b` |
-| And/Or/Xor | mov d←a if needed; `op d,b` |
-| Shl/Shr/Sar | 移位计数→CL; mov d←a; `shift d,cl`（见 6.3） |
-| Neg/Not | mov d←s if needed; `neg/not d` |
-| SetCond | `cmp a,b`（或 `test a,b`）; `setcc d; movzbl d,d` |
-| BrCond | `cmp a,b`（或 `test a,b`）; `jcc label` |
-| Ld | `mov d,[base+offset]` |
-| St | `mov [base+offset],s` |
-| ExitTb | `mov rax,val; jmp tb_ret`（val==0 时 `jmp epilogue_return_zero`） |
-| GotoTb | `jmp rel32`（可修补，记录偏移） |
+约束系统保证 codegen 收到的寄存器满足指令需求，因此每个 opcode
+只需发射最简指令序列：
 
-### 6.3 移位指令的 CL 处理
+| IR Opcode | x86-64 指令 | 约束保证 |
+|-----------|------------|---------|
+| Add | d==a: `add d,b`; d==b: `add d,a`; else: `lea d,[a+b]` | 三地址，无别名 |
+| Sub | `sub d,b` | d==a (oalias) |
+| Mul | `imul d,b` | d==a (oalias) |
+| And/Or/Xor | `op d,b` | d==a (oalias) |
+| Neg/Not | `neg/not d` | d==a (oalias) |
+| Shl/Shr/Sar | `shift d,cl` | d==a (oalias), count==RCX (fixed) |
+| SetCond | `cmp a,b; setcc d; movzbl d,d` | d≠a, d≠b (newreg) |
+| BrCond | `cmp a,b; jcc label` | 无输出 |
+| Ld | `mov d,[base+offset]` | — |
+| St | `mov [base+offset],s` | — |
+| ExitTb | `mov rax,val; jmp tb_ret` | — |
+| GotoTb | `jmp rel32` (可修补) | — |
 
-x86 要求移位计数必须在 CL 寄存器中。`out_shift` 处理三种情况：
-
-1. **计数已在 RCX**：直接 `shift d,cl`
-2. **目标是 RCX**：通过计数寄存器交换，避免冲突
-3. **一般情况**：`push rcx; mov rcx,count; shift d,cl; pop rcx`
-
-### 6.4 SetCond/BrCond 的 TstEq/TstNe 支持
+### 7.3 SetCond/BrCond 的 TstEq/TstNe 支持
 
 当条件码为 `TstEq` 或 `TstNe` 时，使用 `test a,b`（按位与测试）
 代替 `cmp a,b`（减法比较）。这对应 QEMU 7.x+ 新增的
 test-and-branch 优化。
 
-## 7. QEMU 参考对照
+## 8. QEMU 参考对照
 
 | tcg-rs 函数 | QEMU 函数 |
 |-------------|-----------|
@@ -250,5 +270,5 @@ test-and-branch 优化。
 | `X86_64CodeGen::tcg_out_movi` | `tcg_out_movi` |
 | `X86_64CodeGen::tcg_out_ld` | `tcg_out_ld` |
 | `X86_64CodeGen::tcg_out_st` | `tcg_out_st` |
-| `out_shift` | `tcg_out_op` (shift cases) |
+| `op_constraint()` | `tcg_target_op_def()` |
 | `cond_from_u32` | implicit in QEMU (enum cast) |
