@@ -130,6 +130,57 @@ fn test_add_x3_x1_x2() {
     assert_eq!(cpu.regs[3], 300, "x3 should be 100 + 200 = 300");
 }
 
+#[repr(C)]
+struct ShiftCpuState {
+    out: u64,
+}
+
+#[test]
+fn test_shift_out_rcx_count_non_rcx() {
+    let mut backend = X86_64CodeGen::new();
+    let mut buf = CodeBuffer::new(4096).unwrap();
+    backend.emit_prologue(&mut buf);
+    backend.emit_epilogue(&mut buf);
+
+    let mut ctx = Context::new();
+    backend.init_context(&mut ctx);
+
+    let env =
+        ctx.new_fixed(Type::I64, tcg_backend::x86_64::Reg::Rbp as u8, "env");
+
+    let c1 = ctx.new_const(Type::I64, 1);
+    let cval = ctx.new_const(Type::I64, 0x10);
+    let ccnt = ctx.new_const(Type::I64, 3);
+
+    let t_hold = ctx.new_temp(Type::I64);
+    let t_val = ctx.new_temp(Type::I64);
+    let t_cnt = ctx.new_temp(Type::I64);
+    let t_out = ctx.new_temp(Type::I64);
+    let t_dummy = ctx.new_temp(Type::I64);
+
+    ctx.gen_insn_start(0x2000);
+    ctx.gen_mov(Type::I64, t_hold, c1);
+    ctx.gen_mov(Type::I64, t_val, cval);
+    ctx.gen_mov(Type::I64, t_cnt, ccnt);
+    ctx.gen_shl(Type::I64, t_out, t_val, t_cnt);
+    ctx.gen_add(Type::I64, t_dummy, t_hold, t_cnt);
+    ctx.gen_st(Type::I64, t_out, env, 0);
+    ctx.gen_exit_tb(0);
+
+    let mut cpu = ShiftCpuState { out: 0 };
+    let exit_val = unsafe {
+        translate_and_execute(
+            &mut ctx,
+            &backend,
+            &mut buf,
+            &mut cpu as *mut ShiftCpuState as *mut u8,
+        )
+    };
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.out, 0x10u64 << 3);
+}
+
 /// Test: SUB x3, x1, x2
 #[test]
 fn test_sub_x3_x1_x2() {
