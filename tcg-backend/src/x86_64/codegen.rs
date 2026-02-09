@@ -143,13 +143,22 @@ impl HostCodeGen for X86_64CodeGen {
                 );
             }
             Opcode::Mul => {
-                out_binary_mov(buf, rexw, oregs, iregs);
-                emit_imul_rr(
-                    buf,
-                    rexw,
-                    Reg::from_u8(oregs[0]),
-                    Reg::from_u8(iregs[1]),
-                );
+                if oregs[0] == iregs[1] && oregs[0] != iregs[0] {
+                    emit_imul_rr(
+                        buf,
+                        rexw,
+                        Reg::from_u8(oregs[0]),
+                        Reg::from_u8(iregs[0]),
+                    );
+                } else {
+                    out_binary_mov(buf, rexw, oregs, iregs);
+                    emit_imul_rr(
+                        buf,
+                        rexw,
+                        Reg::from_u8(oregs[0]),
+                        Reg::from_u8(iregs[1]),
+                    );
+                }
             }
             Opcode::And => {
                 out_binary_arith(buf, ArithOp::And, rexw, oregs, iregs);
@@ -253,6 +262,16 @@ fn out_binary_arith(
     oregs: &[u8],
     iregs: &[u8],
 ) {
+    if oregs[0] == iregs[1] && oregs[0] != iregs[0] {
+        emit_arith_rr(
+            buf,
+            aop,
+            rexw,
+            Reg::from_u8(oregs[0]),
+            Reg::from_u8(iregs[0]),
+        );
+        return;
+    }
     out_binary_mov(buf, rexw, oregs, iregs);
     emit_arith_rr(
         buf,
@@ -304,6 +323,10 @@ fn out_shift(
             emit_pop(buf, Reg::Rcx);
             return;
         }
+    } else if oregs[0] == Reg::Rcx as u8 && oregs[0] != iregs[0] {
+        emit_shift_cl(buf, sop, rexw, a);
+        emit_mov_rr(buf, rexw, d, a);
+        return;
     } else if oregs[0] != iregs[0] {
         emit_mov_rr(buf, rexw, d, a);
     }
