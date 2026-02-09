@@ -1,3 +1,4 @@
+pub mod codegen;
 pub mod emitter;
 pub mod regs;
 

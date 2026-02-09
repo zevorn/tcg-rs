@@ -125,6 +125,10 @@ impl Cond {
     pub const fn is_unsigned(self) -> bool {
         matches!(self, Cond::Ltu | Cond::Geu | Cond::Leu | Cond::Gtu)
     }
+
+    pub const fn is_tst(self) -> bool {
+        matches!(self, Cond::TstEq | Cond::TstNe)
+    }
 }
 
 /// Memory operation descriptor — encodes size, signedness,

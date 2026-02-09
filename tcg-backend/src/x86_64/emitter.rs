@@ -1,11 +1,7 @@
 #![allow(non_upper_case_globals)]
 
 use crate::code_buffer::CodeBuffer;
-use crate::x86_64::regs::{
-    Reg, CALLEE_SAVED, CALL_ARG_REGS, STACK_ADDEND, STATIC_CALL_ARGS_SIZE,
-    TCG_AREG0,
-};
-use crate::HostCodeGen;
+use crate::x86_64::regs::Reg;
 
 // -- Prefix flags (matching QEMU's P_* constants) --
 
@@ -1156,71 +1152,5 @@ impl X86_64CodeGen {
 impl Default for X86_64CodeGen {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl HostCodeGen for X86_64CodeGen {
-    fn emit_prologue(&mut self, buf: &mut CodeBuffer) {
-        self.prologue_offset = buf.offset();
-
-        for &reg in CALLEE_SAVED {
-            emit_push(buf, reg);
-        }
-
-        // mov TCG_AREG0 (rbp), rdi (first argument)
-        emit_mov_rr(buf, true, TCG_AREG0, CALL_ARG_REGS[0]);
-
-        // sub rsp, STACK_ADDEND
-        emit_arith_ri(buf, ArithOp::Sub, true, Reg::Rsp, STACK_ADDEND as i32);
-
-        // jmp *rsi (second argument = TB host code pointer)
-        emit_jmp_reg(buf, CALL_ARG_REGS[1]);
-
-        self.code_gen_start = buf.offset();
-    }
-
-    fn emit_epilogue(&mut self, buf: &mut CodeBuffer) {
-        // goto_ptr return path: set rax = 0
-        self.epilogue_return_zero_offset = buf.offset();
-        emit_mov_ri(buf, false, Reg::Rax, 0);
-
-        // TB return path: rax already set
-        self.tb_ret_offset = buf.offset();
-
-        // add rsp, STACK_ADDEND
-        emit_arith_ri(buf, ArithOp::Add, true, Reg::Rsp, STACK_ADDEND as i32);
-
-        for &reg in CALLEE_SAVED.iter().rev() {
-            emit_pop(buf, reg);
-        }
-
-        emit_ret(buf);
-    }
-
-    fn patch_jump(
-        &mut self,
-        buf: &mut CodeBuffer,
-        jump_offset: usize,
-        target_offset: usize,
-    ) {
-        let disp = (target_offset as i64) - (jump_offset as i64 + 5);
-        assert!(
-            disp >= i32::MIN as i64 && disp <= i32::MAX as i64,
-            "jump displacement out of i32 range"
-        );
-        buf.patch_u32(jump_offset + 1, disp as u32);
-    }
-
-    fn epilogue_offset(&self) -> usize {
-        self.tb_ret_offset
-    }
-
-    fn init_context(&self, ctx: &mut tcg_core::Context) {
-        ctx.reserved_regs = crate::x86_64::regs::RESERVED_REGS;
-        ctx.set_frame(
-            Reg::Rsp as u8,
-            STATIC_CALL_ARGS_SIZE as i64,
-            (crate::x86_64::regs::CPU_TEMP_BUF_NLONGS * 8) as i64,
-        );
     }
 }

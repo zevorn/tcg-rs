@@ -36,6 +36,14 @@ impl Reg {
     pub const fn needs_rex(self) -> bool {
         (self as u8) >= 8
     }
+
+    /// Convert a raw register number (0-15) to Reg.
+    #[inline]
+    pub fn from_u8(val: u8) -> Self {
+        assert!(val < 16, "invalid register number: {val}");
+        // SAFETY: Reg is repr(u8) with variants 0..=15.
+        unsafe { core::mem::transmute(val) }
+    }
 }
 
 /// TCG_AREG0 = RBP: pointer to CPUArchState (env).
@@ -76,3 +84,9 @@ pub const FRAME_SIZE: usize = {
 
 /// Stack adjustment after pushes.
 pub const STACK_ADDEND: usize = FRAME_SIZE - PUSH_SIZE;
+
+/// All GPRs available for register allocation (excludes
+/// RSP and RBP which are reserved).
+pub const ALLOCATABLE_REGS: RegSet = RegSet::from_raw(
+    0xFFFF & !((1 << Reg::Rsp as u64) | (1 << Reg::Rbp as u64)),
+);
