@@ -924,6 +924,44 @@ riscv_bin_case!(
 );
 
 riscv_bin_case!(
+    test_and_case_basic,
+    gen_and,
+    0xF0F0u64,
+    0x0FF0u64,
+    0x00F0u64
+);
+riscv_bin_case!(
+    test_and_case_zero,
+    gen_and,
+    0x1234u64,
+    0u64,
+    0u64
+);
+riscv_bin_case!(
+    test_and_case_high,
+    gen_and,
+    0xFFFF_0000_0000_FFFFu64,
+    0x0F0F_F0F0_00FF_FF00u64,
+    0x0F0F_0000_0000_FF00u64
+);
+
+riscv_bin_case!(test_or_case_basic, gen_or, 0xF0u64, 0x0Fu64, 0xFFu64);
+riscv_bin_case!(
+    test_or_case_zero,
+    gen_or,
+    0u64,
+    0x1234_5678u64,
+    0x1234_5678u64
+);
+riscv_bin_case!(
+    test_or_case_high,
+    gen_or,
+    0x8000_0000_0000_0000u64,
+    0x1u64,
+    0x8000_0000_0000_0001u64
+);
+
+riscv_bin_case!(
     test_xor_case_small,
     gen_xor,
     0xFF00u64,
@@ -1422,4 +1460,217 @@ fn test_complex_pc_relative_mask() {
 
     assert_eq!(exit_val, 0);
     assert_eq!(cpu.regs[14], (cpu.pc + 0x100u64) & 0xFFFu64);
+}
+
+#[test]
+fn test_neg_basic() {
+    let mut cpu = RiscvCpuState::new();
+    cpu.regs[1] = 0x1234u64;
+
+    let exit_val = run_riscv_tb(&mut cpu, |ctx, _env, regs, _pc| {
+        let t_neg = ctx.new_temp(Type::I64);
+        ctx.gen_insn_start(0x5100);
+        ctx.gen_neg(Type::I64, t_neg, regs[1]);
+        ctx.gen_mov(Type::I64, regs[15], t_neg);
+        ctx.gen_exit_tb(0);
+    });
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.regs[15], 0u64.wrapping_sub(0x1234u64));
+}
+
+#[test]
+fn test_not_basic() {
+    let mut cpu = RiscvCpuState::new();
+    cpu.regs[1] = 0x00FF_00FF_00FF_00FFu64;
+
+    let exit_val = run_riscv_tb(&mut cpu, |ctx, _env, regs, _pc| {
+        let t_not = ctx.new_temp(Type::I64);
+        ctx.gen_insn_start(0x5110);
+        ctx.gen_not(Type::I64, t_not, regs[1]);
+        ctx.gen_mov(Type::I64, regs[16], t_not);
+        ctx.gen_exit_tb(0);
+    });
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.regs[16], !0x00FF_00FF_00FF_00FFu64);
+}
+
+#[test]
+fn test_mov_chain() {
+    let mut cpu = RiscvCpuState::new();
+    cpu.regs[1] = 0xA5A5_5AA5_A5A5_5AA5u64;
+
+    let exit_val = run_riscv_tb(&mut cpu, |ctx, _env, regs, _pc| {
+        ctx.gen_insn_start(0x5120);
+        ctx.gen_mov(Type::I64, regs[2], regs[1]);
+        ctx.gen_mov(Type::I64, regs[3], regs[2]);
+        ctx.gen_exit_tb(0);
+    });
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.regs[2], cpu.regs[1]);
+    assert_eq!(cpu.regs[3], cpu.regs[1]);
+}
+
+#[test]
+fn test_brcond_on_temp_eq() {
+    let mut cpu = RiscvCpuState::new();
+    cpu.regs[1] = 10u64;
+    cpu.regs[2] = 20u64;
+
+    let exit_val = run_riscv_tb(&mut cpu, |ctx, _env, regs, _pc| {
+        let label_eq = ctx.new_label();
+        let label_end = ctx.new_label();
+        let t_add = ctx.new_temp(Type::I64);
+        let c30 = ctx.new_const(Type::I64, 30u64);
+        let c1 = ctx.new_const(Type::I64, 1u64);
+        let c0 = ctx.new_const(Type::I64, 0u64);
+        let t_out = ctx.new_temp(Type::I64);
+
+        ctx.gen_insn_start(0x5130);
+        ctx.gen_add(Type::I64, t_add, regs[1], regs[2]);
+        ctx.gen_brcond(Type::I64, t_add, c30, tcg_core::Cond::Eq, label_eq);
+        ctx.gen_mov(Type::I64, t_out, c0);
+        ctx.gen_mov(Type::I64, regs[4], t_out);
+        ctx.gen_br(label_end);
+
+        ctx.gen_set_label(label_eq);
+        ctx.gen_mov(Type::I64, t_out, c1);
+        ctx.gen_mov(Type::I64, regs[4], t_out);
+        ctx.gen_set_label(label_end);
+        ctx.gen_exit_tb(0);
+    });
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.regs[4], 1u64);
+}
+
+#[test]
+fn test_countdown_loop_sum() {
+    let mut cpu = RiscvCpuState::new();
+    cpu.regs[1] = 4u64;
+    cpu.regs[2] = 0u64;
+
+    let exit_val = run_riscv_tb(&mut cpu, |ctx, _env, regs, _pc| {
+        let label_loop = ctx.new_label();
+        let c1 = ctx.new_const(Type::I64, 1u64);
+        let c0 = ctx.new_const(Type::I64, 0u64);
+        let t_sum = ctx.new_temp(Type::I64);
+        let t_cnt = ctx.new_temp(Type::I64);
+
+        ctx.gen_insn_start(0x5140);
+        ctx.gen_set_label(label_loop);
+        ctx.gen_add(Type::I64, t_sum, regs[2], regs[1]);
+        ctx.gen_mov(Type::I64, regs[2], t_sum);
+        ctx.gen_sub(Type::I64, t_cnt, regs[1], c1);
+        ctx.gen_mov(Type::I64, regs[1], t_cnt);
+        ctx.gen_brcond(
+            Type::I64,
+            regs[1],
+            c0,
+            tcg_core::Cond::Ne,
+            label_loop,
+        );
+        ctx.gen_exit_tb(0);
+    });
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.regs[2], 10u64);
+    assert_eq!(cpu.regs[1], 0u64);
+}
+
+#[test]
+fn test_mem_store_overwrite() {
+    let mut cpu = RiscvCpuStateMem::new();
+    let exit_val = run_riscv_tb(&mut cpu, |ctx, env, regs, _pc| {
+        let v1 = ctx.new_const(Type::I64, 0x1111_2222_3333_4444u64);
+        let v2 = ctx.new_const(Type::I64, 0xAAAA_BBBB_CCCC_DDDDu64);
+        let t1 = ctx.new_temp(Type::I64);
+        let t2 = ctx.new_temp(Type::I64);
+        let t_load = ctx.new_temp(Type::I64);
+        let mem_offset = std::mem::offset_of!(RiscvCpuStateMem, mem) as i64 + 16;
+
+        ctx.gen_insn_start(0x5150);
+        ctx.gen_mov(Type::I64, t1, v1);
+        ctx.gen_st(Type::I64, t1, env, mem_offset);
+        ctx.gen_mov(Type::I64, t2, v2);
+        ctx.gen_st(Type::I64, t2, env, mem_offset);
+        ctx.gen_ld(Type::I64, t_load, env, mem_offset);
+        ctx.gen_mov(Type::I64, regs[1], t_load);
+        ctx.gen_exit_tb(0);
+    });
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.regs[1], 0xAAAA_BBBB_CCCC_DDDDu64);
+    let stored = u64::from_le_bytes(cpu.mem[16..24].try_into().unwrap());
+    assert_eq!(stored, 0xAAAA_BBBB_CCCC_DDDDu64);
+}
+
+#[test]
+fn test_mem_load_add_sum() {
+    let mut cpu = RiscvCpuStateMem::new();
+    cpu.mem[0..8].copy_from_slice(&0x10u64.to_le_bytes());
+    cpu.mem[8..16].copy_from_slice(&0x20u64.to_le_bytes());
+
+    let exit_val = run_riscv_tb(&mut cpu, |ctx, env, regs, _pc| {
+        let t0 = ctx.new_temp(Type::I64);
+        let t1 = ctx.new_temp(Type::I64);
+        let t_sum = ctx.new_temp(Type::I64);
+        let mem_offset = std::mem::offset_of!(RiscvCpuStateMem, mem) as i64;
+
+        ctx.gen_insn_start(0x5160);
+        ctx.gen_ld(Type::I64, t0, env, mem_offset);
+        ctx.gen_ld(Type::I64, t1, env, mem_offset + 8);
+        ctx.gen_add(Type::I64, t_sum, t0, t1);
+        ctx.gen_mov(Type::I64, regs[2], t_sum);
+        ctx.gen_exit_tb(0);
+    });
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.regs[2], 0x30u64);
+}
+
+#[test]
+fn test_shift_count_computed() {
+    let mut cpu = RiscvCpuState::new();
+    cpu.regs[1] = 0x2u64;
+    cpu.regs[2] = 3u64;
+
+    let exit_val = run_riscv_tb(&mut cpu, |ctx, _env, regs, _pc| {
+        let t_cnt = ctx.new_temp(Type::I64);
+        let t_out = ctx.new_temp(Type::I64);
+        let c1 = ctx.new_const(Type::I64, 1u64);
+
+        ctx.gen_insn_start(0x5170);
+        ctx.gen_add(Type::I64, t_cnt, regs[2], c1);
+        ctx.gen_shl(Type::I64, t_out, regs[1], t_cnt);
+        ctx.gen_mov(Type::I64, regs[5], t_out);
+        ctx.gen_exit_tb(0);
+    });
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.regs[5], 0x2u64 << 4);
+}
+
+#[test]
+fn test_mul_sub_mix() {
+    let mut cpu = RiscvCpuState::new();
+    cpu.regs[1] = 9u64;
+    cpu.regs[2] = 7u64;
+    cpu.regs[3] = 10u64;
+
+    let exit_val = run_riscv_tb(&mut cpu, |ctx, _env, regs, _pc| {
+        let t_mul = ctx.new_temp(Type::I64);
+        let t_sub = ctx.new_temp(Type::I64);
+
+        ctx.gen_insn_start(0x5180);
+        ctx.gen_mul(Type::I64, t_mul, regs[1], regs[2]);
+        ctx.gen_sub(Type::I64, t_sub, t_mul, regs[3]);
+        ctx.gen_mov(Type::I64, regs[6], t_sub);
+        ctx.gen_exit_tb(0);
+    });
+
+    assert_eq!(exit_val, 0);
+    assert_eq!(cpu.regs[6], (9u64 * 7u64).wrapping_sub(10u64));
 }
