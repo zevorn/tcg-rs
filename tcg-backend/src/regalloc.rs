@@ -303,21 +303,72 @@ pub fn regalloc_and_codegen(
                     iregs.push(reg);
                 }
 
-                // Free dead input registers
-                for i in 0..nb_iargs {
-                    let arg_pos = (nb_oargs + i) as u32;
-                    if life.is_dead(arg_pos) {
-                        let tidx = op.args[nb_oargs + i];
-                        temp_dead(ctx, &mut state, tidx);
+                let mut oregs = Vec::new();
+                let mut sub_alias_done = false;
+                if op.opc == Opcode::Sub && nb_oargs == 1 && nb_iargs == 2 {
+                    let dst_tidx = op.args[0];
+                    let lhs_tidx = op.args[nb_oargs];
+                    let lhs_reg = iregs[0];
+                    let lhs_temp = ctx.temp(lhs_tidx);
+                    let input0_dead = life.is_dead(nb_oargs as u32);
+                    if !lhs_temp.is_global_or_fixed() {
+                        if input0_dead {
+                            state.assign(lhs_reg, dst_tidx);
+                            let dst = ctx.temp_mut(dst_tidx);
+                            dst.val_type = TempVal::Reg;
+                            dst.reg = Some(lhs_reg);
+                            dst.mem_coherent = false;
+
+                            let lhs = ctx.temp_mut(lhs_tidx);
+                            lhs.val_type = TempVal::Dead;
+                            lhs.reg = None;
+                            oregs.push(lhs_reg);
+                            sub_alias_done = true;
+                        } else if let Some(copy_reg) = state.free_regs.first() {
+                            state.assign(copy_reg, lhs_tidx);
+                            backend.tcg_out_mov(
+                                buf,
+                                op.op_type,
+                                copy_reg,
+                                lhs_reg,
+                            );
+                            let lhs = ctx.temp_mut(lhs_tidx);
+                            lhs.val_type = TempVal::Reg;
+                            lhs.reg = Some(copy_reg);
+
+                            state.assign(lhs_reg, dst_tidx);
+                            let dst = ctx.temp_mut(dst_tidx);
+                            dst.val_type = TempVal::Reg;
+                            dst.reg = Some(lhs_reg);
+                            dst.mem_coherent = false;
+                            oregs.push(lhs_reg);
+                            sub_alias_done = true;
+                        }
                     }
                 }
-
-                // Allocate output registers
-                let mut oregs = Vec::new();
-                for i in 0..nb_oargs {
-                    let tidx = op.args[i];
-                    let reg = temp_alloc_output(ctx, &mut state, tidx);
-                    oregs.push(reg);
+                if !sub_alias_done {
+                    // Free dead input registers
+                    for i in 0..nb_iargs {
+                        let arg_pos = (nb_oargs + i) as u32;
+                        if life.is_dead(arg_pos) {
+                            let tidx = op.args[nb_oargs + i];
+                            temp_dead(ctx, &mut state, tidx);
+                        }
+                    }
+                    for i in 0..nb_oargs {
+                        let tidx = op.args[i];
+                        let reg = temp_alloc_output(ctx, &mut state, tidx);
+                        oregs.push(reg);
+                    }
+                } else {
+                    // Free dead input registers
+                    for i in 0..nb_iargs {
+                        let arg_pos = (nb_oargs + i) as u32;
+                        if life.is_dead(arg_pos) {
+                            let tidx = op.args[nb_oargs + i];
+                            temp_dead(ctx, &mut state, tidx);
+                        }
+                    }
                 }
 
                 // Collect constant args
