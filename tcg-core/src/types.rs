@@ -218,14 +218,17 @@ impl RegSet {
     }
 
     pub const fn set(self, reg: u8) -> Self {
+        assert!(reg < 64);
         Self(self.0 | (1u64 << reg))
     }
 
     pub const fn clear(self, reg: u8) -> Self {
+        assert!(reg < 64);
         Self(self.0 & !(1u64 << reg))
     }
 
     pub const fn contains(self, reg: u8) -> bool {
+        assert!(reg < 64);
         self.0 & (1u64 << reg) != 0
     }
 

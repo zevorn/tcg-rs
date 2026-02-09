@@ -2,6 +2,7 @@ mod context;
 mod label;
 mod op;
 mod opcode;
+mod regset;
 mod tb;
 mod temp;
 mod types;
