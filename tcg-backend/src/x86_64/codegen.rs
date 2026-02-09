@@ -288,12 +288,12 @@ fn out_shift(
     // x86 requires shift count in CL.
     if iregs[1] != Reg::Rcx as u8 {
         if oregs[0] == Reg::Rcx as u8 {
-            // dst is RCX — swap via count's reg
-            emit_mov_rr(buf, rexw, count, d);
+            emit_push(buf, a);
             emit_mov_rr(buf, true, Reg::Rcx, count);
-            if oregs[0] != iregs[0] {
-                emit_mov_rr(buf, rexw, d, a);
-            }
+            emit_pop(buf, count);
+            emit_shift_cl(buf, sop, rexw, count);
+            emit_mov_rr(buf, rexw, d, count);
+            return;
         } else {
             emit_push(buf, Reg::Rcx);
             emit_mov_rr(buf, true, Reg::Rcx, count);
