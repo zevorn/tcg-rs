@@ -23,6 +23,12 @@ impl CodeBuffer {
     pub fn new(size: usize) -> io::Result<Self> {
         let page_size = page_size();
         let size = (size + page_size - 1) & !(page_size - 1);
+        if size == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "code buffer size must be non-zero",
+            ));
+        }
 
         // SAFETY: mmap with MAP_ANONYMOUS | MAP_PRIVATE, no file backing.
         let ptr = unsafe {
@@ -217,5 +223,10 @@ impl Drop for CodeBuffer {
 
 fn page_size() -> usize {
     // SAFETY: sysconf is always safe to call.
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+    let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if size <= 0 {
+        4096
+    } else {
+        size as usize
+    }
 }
