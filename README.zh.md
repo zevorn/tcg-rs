@@ -1,29 +1,29 @@
-# tcg-rs
+<h1 align="center">tcg-rs</h1>
+<p align="center">
+  <a href="README.md">English</a> | 中文
+</p>
 
 [QEMU](https://www.qemu.org/) **TCG**（Tiny Code Generator）的 Rust 重新实现——一个动态二进制翻译引擎，在运行时将客户架构指令转换为宿主机器码。
 
-> **状态**：早期开发阶段。核心 IR 定义和 x86-64 后端初始化已实现。
-
-[English](README.md) | 中文
+> **状态**：完整的翻译流水线已可工作——IR 构建器、活跃性分析、约束驱动寄存器分配器和 x86-64 代码生成器可从 TCG IR 生成可执行的宿主代码。
 
 ## 概述
 
 tcg-rs 旨在提供一个干净、安全、模块化的 QEMU TCG 子系统 Rust 实现。项目遵循 QEMU 经过验证的架构，同时利用 Rust 的类型系统、内存安全和基于 trait 的可扩展性。
 
 ```
-Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen) → Host Binary
-                                      ↓
-                              TranslationBlock Cache
+IR Builder (gen_*)  ->  Liveness Analysis  ->  RegAlloc + Codegen  ->  Execute
+  ir_builder.rs          liveness.rs           regalloc.rs          translate.rs
+                                               codegen.rs
 ```
 
 ## Crate 结构
 
 | Crate | 状态 | 描述 |
 |-------|------|------|
-| `tcg-core` | 已实现 | IR 定义：opcodes、types、temps、ops、context、labels、翻译块 |
-| `tcg-backend` | 已实现 | 宿主代码生成 trait + x86-64 后端（prologue/epilogue、TB 控制流） |
-| `tcg-tests` | 已实现 | 88 个测试覆盖所有公共 API |
-| `tcg-ir` | 计划中 | IR 生成 API（`tcg_gen_*` 等价物） |
+| `tcg-core` | 已实现 | IR 定义（opcodes、types、temps、ops、context、labels、TBs）+ IR 构建器（`gen_*` 方法） |
+| `tcg-backend` | 已实现 | 活跃性分析、约束系统、寄存器分配器、x86-64 代码生成、翻译流水线 |
+| `tcg-tests` | 已实现 | 522 个测试：单元测试、后端回归测试、端到端集成测试 |
 | `tcg-opt` | 计划中 | IR 优化器：常量/拷贝传播、DCE |
 | `tcg-frontend` | 计划中 | 客户指令解码 trait + 各架构解码器 |
 | `tcg-exec` | 计划中 | CPU 执行循环、TB 缓存、TB 链接/失效 |
@@ -33,16 +33,16 @@ Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen
 ## 关键设计决策
 
 - **统一类型多态 Opcodes**：单个 `Add` opcode 同时适用于 I32 和 I64（类型由 `Op::op_type` 携带），相比 QEMU 的分裂设计减少约 40% 的 opcode 数量。
-- **基于 Trait 的后端**：使用 `HostCodeGen` trait 而非条件编译，支持多后端和可测试性。
-- **最小化 `unsafe`**：限制在 JIT 代码缓冲区（mmap/mprotect）和客户内存访问中。所有 IR 操作均为安全 Rust。
-- **常量去重**：`Context` 中按类型分桶的 `HashMap` 避免重复的常量 temp。
+- **约束驱动寄存器分配**：声明式 `ArgConstraint`/`OpConstraint` 类型对齐 QEMU 的 `TCGArgConstraint` + `C_O*_I*` 宏系统。分配器完全通用——无 per-opcode 分支。新增 opcode 只需添加约束表条目。
+- **基于 Trait 的后端**：使用 `HostCodeGen` trait（包含 `op_constraint()`）而非条件编译，支持多后端和可测试性。
+- **最小化 `unsafe`**：限制在 JIT 代码缓冲区（mmap/mprotect）和生成代码执行中。所有 IR 操作均为安全 Rust。
 - **`RegSet` 使用 `u64` 位图**：寄存器分配热路径使用位操作而非集合类型。
 
 ## 构建
 
 ```bash
 cargo build                  # 构建所有 crate
-cargo test                   # 运行全部 88 个测试
+cargo test                   # 运行全部 522 个测试
 cargo clippy -- -D warnings  # Lint 检查
 cargo fmt --check            # 格式检查
 ```
@@ -52,35 +52,49 @@ cargo fmt --check            # 格式检查
 ### tcg-core
 
 - **类型系统**：`Type`（I32/I64/I128/V64/V128/V256）、`Cond`（QEMU 兼容编码）、`MemOp`（位域打包）、`RegSet`（u64 位图）
-- **Opcodes**：约 70 个统一 opcode，配有静态 `OpDef` 表和 `OpFlags` 属性标志（INT、SIDE_EFFECTS、BB_EXIT、CARRY_IN/OUT 等）
+- **Opcodes**：约 70 个统一 opcode，配有静态 `OpDef` 表和 `OpFlags` 属性标志
 - **临时变量**：五种生命周期（Ebb、Tb、Global、Fixed、Const），包含寄存器分配器状态
 - **标签**：支持前向引用，通过 `LabelUse`/`RelocKind` 进行 back-patching
 - **操作**：`Op` 使用固定大小参数数组，`LifeData` 用于活跃性分析
 - **上下文**：翻译上下文，`reset()` 时保留全局变量，支持常量去重
+- **IR 构建器**：`gen_add/sub/mul/and/or/xor/shl/shr/sar/neg/not/mov/setcond/brcond/br/ld/st/exit_tb/goto_tb`
 - **翻译块**：`TranslationBlock` 双出口设计，`JumpCache`（4096 项直接映射缓存）
 
 ### tcg-backend
 
-- **CodeBuffer**：基于 mmap 的 JIT 内存，遵循 W^X（写异或执行）纪律
+- **约束系统**（`constraint.rs`）：`ArgConstraint`/`OpConstraint` 类型及构建函数（`o1_i2_alias`、`o1_i2_alias_fixed`、`n1_i2` 等）
+- **活跃性分析**（`liveness.rs`）：反向遍历计算每个参数的 dead/sync 标志
+- **寄存器分配器**（`regalloc.rs`）：约束驱动贪心分配器，对齐 QEMU 的 `tcg_reg_alloc_op()`——别名复用、强制驱逐、输入后修正
+- **翻译流水线**（`translate.rs`）：`translate_and_execute()` 串联 liveness → regalloc+codegen → JIT 执行
 - **x86-64 后端**：
-  - System V ABI prologue/epilogue，`TCG_AREG0 = RBP`（env 指针）
-  - 双 epilogue 入口：零返回路径 + TB 返回路径
+  - 完整 GPR 指令编码器（emitter.rs）：算术、移位、数据移动、内存、乘除、位操作、分支、setcc/cmovcc
+  - 约束表（constraints.rs）：per-opcode 寄存器约束，对齐 QEMU 的 `tcg_target_op_def()`
+  - 简化 codegen（codegen.rs）：约束保证消除所有寄存器杂耍——每个 opcode 发射最少指令
+  - System V ABI prologue/epilogue，`TCG_AREG0 = RBP`
   - `exit_tb`、`goto_tb`（4 字节对齐用于原子修补）、`goto_ptr`
-  - 栈帧：callee-saved 寄存器 + 128B 调用参数区 + 1024B 溢出区
+
+### tcg-tests
+
+- **单元测试**：核心数据结构 API（types、opcodes、temps、labels、ops、context、TBs）
+- **后端回归测试**：x86-64 指令编码、codegen 别名行为
+- **集成测试**：使用最小 RISC-V CPU 状态的端到端流水线——ALU 运算、分支、循环、内存访问、复杂多操作序列
 
 ## QEMU 参考
 
 本项目参考以下 QEMU 源文件：
 
-- `tcg/tcg.c`、`tcg/tcg-op.c` — 核心 codegen 和 IR 发射
+- `tcg/tcg.c` — 寄存器分配器（`tcg_reg_alloc_op`）和代码生成
+- `tcg/tcg-op.c` — IR 发射（`tcg_gen_*`）
 - `tcg/optimize.c` — IR 优化器
-- `accel/tcg/cpu-exec.c` — 执行循环
-- `tcg/i386/tcg-target.c.inc` — x86-64 后端
+- `tcg/i386/tcg-target.c.inc` — x86-64 后端 + 约束表（`tcg_target_op_def`）
+- `include/tcg/tcg.h` — `TCGArgConstraint`、`TCGTemp`、`TCGContext`
 - `include/tcg/tcg-opc.h` — Opcode 定义
 
 ## 文档
 
-- [设计文档](docs/design.md) — 详细的架构和设计原理
+- [设计文档](docs/design.md) — 架构、数据结构、约束系统、翻译流水线
+- [x86-64 后端](docs/x86_64-backend.md) — 指令编码器、约束表、codegen 分派
+- [代码风格](docs/coding-style.md) — 命名规范、格式规则
 
 ## 许可证
 

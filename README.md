@@ -1,4 +1,7 @@
-# tcg-rs
+<h1 align="center">tcg-rs</h1>
+<p align="center">
+  English | <a href="README.zh.md">中文</a>
+</p>
 
 A Rust reimplementation of [QEMU](https://www.qemu.org/)'s **TCG** (Tiny Code Generator) — the dynamic binary translation engine that converts guest architecture instructions into host machine code at runtime.
 
