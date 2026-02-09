@@ -1,4 +1,5 @@
 use crate::code_buffer::CodeBuffer;
+use crate::constraint::OpConstraint;
 use crate::HostCodeGen;
 use tcg_core::label::RelocKind;
 use tcg_core::temp::TempKind;
@@ -21,10 +22,6 @@ impl RegAllocState {
         }
     }
 
-    fn alloc_reg(&mut self) -> u8 {
-        self.free_regs.first().expect("out of registers")
-    }
-
     fn free_reg(&mut self, reg: u8) {
         self.reg_to_temp[reg as usize] = None;
         if self.allocatable.contains(reg) {
@@ -38,21 +35,119 @@ impl RegAllocState {
     }
 }
 
-/// Ensure a temp is in a host register. Returns the register.
-fn temp_load(
+// -- Helper functions --
+
+/// Evict the current occupant of `reg`. Globals are synced to
+/// memory; locals are moved to a free register.
+fn evict_reg(
+    ctx: &mut Context,
+    state: &mut RegAllocState,
+    backend: &impl HostCodeGen,
+    buf: &mut CodeBuffer,
+    reg: u8,
+) {
+    let Some(tidx) = state.reg_to_temp[reg as usize] else {
+        return;
+    };
+    let temp = ctx.temp(tidx);
+    if temp.is_global_or_fixed() {
+        // Sync to memory and mark Mem
+        temp_sync(ctx, backend, buf, tidx);
+        let t = ctx.temp_mut(tidx);
+        t.val_type = TempVal::Mem;
+        t.reg = None;
+        t.mem_coherent = true;
+        state.free_reg(reg);
+    } else {
+        // Move local to another free register
+        let ty = temp.ty;
+        let free = state.free_regs.subtract(RegSet::from_raw(1u64 << reg));
+        let dst = free.first().expect("no free register for eviction");
+        backend.tcg_out_mov(buf, ty, dst, reg);
+        state.free_reg(reg);
+        state.assign(dst, tidx);
+        let t = ctx.temp_mut(tidx);
+        t.reg = Some(dst);
+    }
+}
+
+/// Allocate a register from `required & ~forbidden`, preferring
+/// `preferred`. Evicts an occupant if necessary. If all required
+/// registers are forbidden (e.g. fixed constraint conflicts with
+/// a prior input), evict the forbidden occupant first.
+fn reg_alloc(
+    ctx: &mut Context,
+    state: &mut RegAllocState,
+    backend: &impl HostCodeGen,
+    buf: &mut CodeBuffer,
+    required: RegSet,
+    forbidden: RegSet,
+    preferred: RegSet,
+) -> u8 {
+    let candidates = required.intersect(state.allocatable).subtract(forbidden);
+    // Try preferred & free first
+    let pref_free = candidates.intersect(state.free_regs).intersect(preferred);
+    if let Some(r) = pref_free.first() {
+        return r;
+    }
+    // Try any free
+    let any_free = candidates.intersect(state.free_regs);
+    if let Some(r) = any_free.first() {
+        return r;
+    }
+    // Try evicting a non-forbidden occupant
+    if let Some(r) = candidates.first() {
+        evict_reg(ctx, state, backend, buf, r);
+        return r;
+    }
+    // All required regs are forbidden — must evict a forbidden
+    // occupant (e.g. fixed RCX constraint vs prior input in RCX).
+    let forced = required.intersect(state.allocatable);
+    let r = forced
+        .first()
+        .expect("no candidate register for allocation");
+    evict_reg(ctx, state, backend, buf, r);
+    r
+}
+
+/// Load a temp into a register satisfying the constraint.
+/// Returns the allocated host register.
+#[allow(clippy::too_many_arguments)]
+fn temp_load_to(
     ctx: &mut Context,
     state: &mut RegAllocState,
     backend: &impl HostCodeGen,
     buf: &mut CodeBuffer,
     tidx: TempIdx,
+    required: RegSet,
+    forbidden: RegSet,
+    preferred: RegSet,
 ) -> u8 {
     let temp = ctx.temp(tidx);
     match temp.val_type {
-        TempVal::Reg => temp.reg.unwrap(),
+        TempVal::Reg => {
+            let cur = temp.reg.unwrap();
+            if required.contains(cur) && !forbidden.contains(cur) {
+                return cur;
+            }
+            // Current reg doesn't satisfy — move
+            let ty = temp.ty;
+            let dst = reg_alloc(
+                ctx, state, backend, buf, required, forbidden, preferred,
+            );
+            backend.tcg_out_mov(buf, ty, dst, cur);
+            state.free_reg(cur);
+            state.assign(dst, tidx);
+            let t = ctx.temp_mut(tidx);
+            t.reg = Some(dst);
+            dst
+        }
         TempVal::Const => {
             let val = temp.val;
             let ty = temp.ty;
-            let reg = state.alloc_reg();
+            let reg = reg_alloc(
+                ctx, state, backend, buf, required, forbidden, preferred,
+            );
             state.assign(reg, tidx);
             backend.tcg_out_movi(buf, ty, reg, val);
             let t = ctx.temp_mut(tidx);
@@ -64,7 +159,9 @@ fn temp_load(
             let ty = temp.ty;
             let mem_base = temp.mem_base;
             let mem_offset = temp.mem_offset;
-            let reg = state.alloc_reg();
+            let reg = reg_alloc(
+                ctx, state, backend, buf, required, forbidden, preferred,
+            );
             state.assign(reg, tidx);
             if let Some(base_idx) = mem_base {
                 let base_reg = ctx.temp(base_idx).reg.unwrap();
@@ -77,7 +174,7 @@ fn temp_load(
             reg
         }
         TempVal::Dead => {
-            panic!("temp_load on dead temp {tidx:?}");
+            panic!("temp_load_to on dead temp {tidx:?}");
         }
     }
 }
@@ -120,8 +217,6 @@ fn sync_globals(
 fn temp_dead(ctx: &mut Context, state: &mut RegAllocState, tidx: TempIdx) {
     let temp = ctx.temp(tidx);
     if temp.is_global_or_fixed() {
-        // Don't free globals/fixed — they persist.
-        // But mark as mem-resident if synced.
         return;
     }
     if let Some(reg) = temp.reg {
@@ -132,19 +227,190 @@ fn temp_dead(ctx: &mut Context, state: &mut RegAllocState, tidx: TempIdx) {
     t.reg = None;
 }
 
-/// Allocate an output register for a temp.
-fn temp_alloc_output(
+/// Generic constraint-driven register allocation for one op.
+///
+/// Mirrors QEMU's `tcg_reg_alloc_op()`.
+#[allow(clippy::needless_range_loop)]
+fn regalloc_op(
     ctx: &mut Context,
     state: &mut RegAllocState,
-    tidx: TempIdx,
-) -> u8 {
-    let reg = state.alloc_reg();
-    state.assign(reg, tidx);
-    let t = ctx.temp_mut(tidx);
-    t.val_type = TempVal::Reg;
-    t.reg = Some(reg);
-    t.mem_coherent = false;
-    reg
+    backend: &impl HostCodeGen,
+    buf: &mut CodeBuffer,
+    op: &tcg_core::Op,
+    ct: &OpConstraint,
+) {
+    let def = &OPCODE_DEFS[op.opc as usize];
+    let nb_oargs = def.nb_oargs as usize;
+    let nb_iargs = def.nb_iargs as usize;
+    let nb_cargs = def.nb_cargs as usize;
+    let life = op.life;
+
+    let mut i_regs = [0u8; 10];
+    let mut i_allocated = RegSet::EMPTY;
+    // Track which aliased inputs can be reused for output
+    let mut i_reusable = [false; 10];
+
+    // 1. Process inputs
+    for i in 0..nb_iargs {
+        let arg_ct = &ct.args[nb_oargs + i];
+        let tidx = op.args[nb_oargs + i];
+        let required = arg_ct.regs;
+        let is_dead = life.is_dead((nb_oargs + i) as u32);
+        let temp = ctx.temp(tidx);
+        let is_readonly = temp.is_global_or_fixed() || temp.is_const();
+
+        if arg_ct.ialias && is_dead && !is_readonly {
+            // Can reuse this input's register for the
+            // aliased output.
+            let preferred = op.output_pref[arg_ct.alias_index as usize];
+            let reg = temp_load_to(
+                ctx,
+                state,
+                backend,
+                buf,
+                tidx,
+                required,
+                i_allocated,
+                preferred,
+            );
+            i_regs[i] = reg;
+            i_allocated = i_allocated.set(reg);
+            i_reusable[i] = true;
+        } else {
+            let reg = temp_load_to(
+                ctx,
+                state,
+                backend,
+                buf,
+                tidx,
+                required,
+                i_allocated,
+                RegSet::EMPTY,
+            );
+            i_regs[i] = reg;
+            i_allocated = i_allocated.set(reg);
+        }
+    }
+
+    // Fixup: re-read actual registers after all inputs are
+    // processed. A later input's allocation may have evicted
+    // an earlier input (e.g. fixed RCX constraint).
+    i_allocated = RegSet::EMPTY;
+    for i in 0..nb_iargs {
+        let tidx = op.args[nb_oargs + i];
+        let temp = ctx.temp(tidx);
+        if temp.val_type == TempVal::Reg {
+            let reg = temp.reg.unwrap();
+            i_regs[i] = reg;
+            i_allocated = i_allocated.set(reg);
+        }
+    }
+
+    // 2. Free dead inputs
+    for i in 0..nb_iargs {
+        if life.is_dead((nb_oargs + i) as u32) {
+            let tidx = op.args[nb_oargs + i];
+            temp_dead(ctx, state, tidx);
+        }
+    }
+
+    // 3. Process outputs
+    let mut o_regs = [0u8; 10];
+    let mut o_allocated = RegSet::EMPTY;
+    for k in 0..nb_oargs {
+        let arg_ct = &ct.args[k];
+        let dst_tidx = op.args[k];
+
+        let reg = if arg_ct.oalias {
+            let ai = arg_ct.alias_index as usize;
+            if i_reusable[ai] {
+                // Reuse the dead input's register
+                i_regs[ai]
+            } else {
+                // Input is still live — copy it away,
+                // take its register for the output.
+                let old_reg = i_regs[ai];
+                let src_tidx = op.args[nb_oargs + ai];
+                let src_temp = ctx.temp(src_tidx);
+                let ty = src_temp.ty;
+                let copy_reg = reg_alloc(
+                    ctx,
+                    state,
+                    backend,
+                    buf,
+                    state.allocatable,
+                    i_allocated.union(o_allocated),
+                    RegSet::EMPTY,
+                );
+                backend.tcg_out_mov(buf, ty, copy_reg, old_reg);
+                state.assign(copy_reg, src_tidx);
+                let t = ctx.temp_mut(src_tidx);
+                t.reg = Some(copy_reg);
+                old_reg
+            }
+        } else if arg_ct.newreg {
+            reg_alloc(
+                ctx,
+                state,
+                backend,
+                buf,
+                arg_ct.regs,
+                i_allocated.union(o_allocated),
+                RegSet::EMPTY,
+            )
+        } else {
+            reg_alloc(
+                ctx,
+                state,
+                backend,
+                buf,
+                arg_ct.regs,
+                o_allocated,
+                RegSet::EMPTY,
+            )
+        };
+
+        state.assign(reg, dst_tidx);
+        let t = ctx.temp_mut(dst_tidx);
+        t.val_type = TempVal::Reg;
+        t.reg = Some(reg);
+        t.mem_coherent = false;
+        o_regs[k] = reg;
+        o_allocated = o_allocated.set(reg);
+    }
+
+    // 4. Collect constant args
+    let cstart = nb_oargs + nb_iargs;
+    let cargs: Vec<u32> =
+        (0..nb_cargs).map(|i| op.args[cstart + i].0).collect();
+
+    // 5. Emit host code
+    backend.tcg_out_op(
+        buf,
+        ctx,
+        op,
+        &o_regs[..nb_oargs],
+        &i_regs[..nb_iargs],
+        &cargs,
+    );
+
+    // 6. Free dead outputs
+    for k in 0..nb_oargs {
+        if life.is_dead(k as u32) {
+            let tidx = op.args[k];
+            temp_dead(ctx, state, tidx);
+        }
+    }
+
+    // 7. Sync globals if needed
+    for i in 0..nb_iargs {
+        let arg_pos = (nb_oargs + i) as u32;
+        if life.is_sync(arg_pos) {
+            let tidx = op.args[nb_oargs + i];
+            temp_sync(ctx, backend, buf, tidx);
+            ctx.temp_mut(tidx).mem_coherent = true;
+        }
+    }
 }
 
 /// Main register allocation + code generation pass.
@@ -156,7 +422,7 @@ pub fn regalloc_and_codegen(
     let allocatable = crate::x86_64::regs::ALLOCATABLE_REGS;
     let mut state = RegAllocState::new(allocatable);
 
-    // Initialize fixed temps (they're always in their reg)
+    // Initialize fixed temps (always in their register)
     let nb_globals = ctx.nb_globals();
     for i in 0..nb_globals {
         let tidx = TempIdx(i);
@@ -173,22 +439,41 @@ pub fn regalloc_and_codegen(
         let op = ctx.ops()[oi].clone();
         let def = &OPCODE_DEFS[op.opc as usize];
         let flags = def.flags;
-        let life = op.life;
 
         match op.opc {
             Opcode::Nop | Opcode::InsnStart => continue,
 
             Opcode::Mov => {
-                // Register rename or emit host mov
                 let dst_idx = op.args[0];
                 let src_idx = op.args[1];
-                let src_reg = temp_load(ctx, &mut state, backend, buf, src_idx);
-                // Free dead input
+                let life = op.life;
+                let src_reg = temp_load_to(
+                    ctx,
+                    &mut state,
+                    backend,
+                    buf,
+                    src_idx,
+                    allocatable,
+                    RegSet::EMPTY,
+                    RegSet::EMPTY,
+                );
                 if life.is_dead(1) {
                     temp_dead(ctx, &mut state, src_idx);
                 }
-                // Allocate output
-                let dst_reg = temp_alloc_output(ctx, &mut state, dst_idx);
+                let dst_reg = reg_alloc(
+                    ctx,
+                    &mut state,
+                    backend,
+                    buf,
+                    allocatable,
+                    RegSet::EMPTY,
+                    RegSet::EMPTY,
+                );
+                state.assign(dst_reg, dst_idx);
+                let t = ctx.temp_mut(dst_idx);
+                t.val_type = TempVal::Reg;
+                t.reg = Some(dst_reg);
+                t.mem_coherent = false;
                 if dst_reg != src_reg {
                     backend.tcg_out_mov(buf, op.op_type, dst_reg, src_reg);
                 }
@@ -199,13 +484,10 @@ pub fn regalloc_and_codegen(
 
             Opcode::SetLabel => {
                 let label_id = op.args[0].0;
-                // Sync all globals at label
                 sync_globals(ctx, backend, buf);
-                // Resolve label
                 let offset = buf.offset();
                 let label = ctx.label_mut(label_id);
                 label.set_value(offset);
-                // Back-patch forward references
                 let uses: Vec<_> = label.uses.drain(..).collect();
                 for u in uses {
                     match u.kind {
@@ -224,7 +506,6 @@ pub fn regalloc_and_codegen(
                 if label.has_value {
                     crate::x86_64::emitter::emit_jmp(buf, label.value);
                 } else {
-                    // Forward ref
                     buf.emit_u8(0xE9);
                     let patch_off = buf.offset();
                     buf.emit_u32(0);
@@ -243,24 +524,35 @@ pub fn regalloc_and_codegen(
             }
 
             Opcode::BrCond => {
+                let ct = backend.op_constraint(op.opc);
                 let nb_iargs = def.nb_iargs as usize;
                 let nb_oargs = def.nb_oargs as usize;
                 let nb_cargs = def.nb_cargs as usize;
+                let life = op.life;
 
-                // Load inputs
                 let mut iregs = Vec::new();
+                let mut i_allocated = RegSet::EMPTY;
                 for i in 0..nb_iargs {
                     let tidx = op.args[nb_oargs + i];
-                    let reg = temp_load(ctx, &mut state, backend, buf, tidx);
+                    let arg_ct = &ct.args[nb_oargs + i];
+                    let reg = temp_load_to(
+                        ctx,
+                        &mut state,
+                        backend,
+                        buf,
+                        tidx,
+                        arg_ct.regs,
+                        i_allocated,
+                        RegSet::EMPTY,
+                    );
                     iregs.push(reg);
+                    i_allocated = i_allocated.set(reg);
                 }
 
-                // Collect cargs
                 let cstart = nb_oargs + nb_iargs;
                 let cargs: Vec<u32> =
                     (0..nb_cargs).map(|i| op.args[cstart + i].0).collect();
 
-                // Free dead inputs
                 for i in 0..nb_iargs {
                     let arg_pos = (nb_oargs + i) as u32;
                     if life.is_dead(arg_pos) {
@@ -269,20 +561,15 @@ pub fn regalloc_and_codegen(
                     }
                 }
 
-                // Sync globals at BB boundary
                 sync_globals(ctx, backend, buf);
 
-                // Emit the comparison
                 let label_id = cargs[1];
                 let label = ctx.label(label_id);
                 let label_resolved = label.has_value;
 
                 backend.tcg_out_op(buf, ctx, &op, &[], &iregs, &cargs);
 
-                // If forward ref, record for patching
                 if !label_resolved {
-                    // The jcc was emitted with a placeholder.
-                    // The disp32 is at buf.offset() - 4.
                     let patch_off = buf.offset() - 4;
                     ctx.label_mut(label_id)
                         .add_use(patch_off, RelocKind::Rel32);
@@ -290,114 +577,8 @@ pub fn regalloc_and_codegen(
             }
 
             _ => {
-                // Generic op handling
-                let nb_oargs = def.nb_oargs as usize;
-                let nb_iargs = def.nb_iargs as usize;
-                let nb_cargs = def.nb_cargs as usize;
-
-                // Load inputs into registers
-                let mut iregs = Vec::new();
-                for i in 0..nb_iargs {
-                    let tidx = op.args[nb_oargs + i];
-                    let reg = temp_load(ctx, &mut state, backend, buf, tidx);
-                    iregs.push(reg);
-                }
-
-                let mut oregs = Vec::new();
-                let mut sub_alias_done = false;
-                if op.opc == Opcode::Sub && nb_oargs == 1 && nb_iargs == 2 {
-                    let dst_tidx = op.args[0];
-                    let lhs_tidx = op.args[nb_oargs];
-                    let lhs_reg = iregs[0];
-                    let lhs_temp = ctx.temp(lhs_tidx);
-                    let input0_dead = life.is_dead(nb_oargs as u32);
-                    if !lhs_temp.is_global_or_fixed() {
-                        if input0_dead {
-                            state.assign(lhs_reg, dst_tidx);
-                            let dst = ctx.temp_mut(dst_tidx);
-                            dst.val_type = TempVal::Reg;
-                            dst.reg = Some(lhs_reg);
-                            dst.mem_coherent = false;
-
-                            let lhs = ctx.temp_mut(lhs_tidx);
-                            lhs.val_type = TempVal::Dead;
-                            lhs.reg = None;
-                            oregs.push(lhs_reg);
-                            sub_alias_done = true;
-                        } else if let Some(copy_reg) = state.free_regs.first() {
-                            state.assign(copy_reg, lhs_tidx);
-                            backend.tcg_out_mov(
-                                buf,
-                                op.op_type,
-                                copy_reg,
-                                lhs_reg,
-                            );
-                            let lhs = ctx.temp_mut(lhs_tidx);
-                            lhs.val_type = TempVal::Reg;
-                            lhs.reg = Some(copy_reg);
-
-                            state.assign(lhs_reg, dst_tidx);
-                            let dst = ctx.temp_mut(dst_tidx);
-                            dst.val_type = TempVal::Reg;
-                            dst.reg = Some(lhs_reg);
-                            dst.mem_coherent = false;
-                            oregs.push(lhs_reg);
-                            sub_alias_done = true;
-                        }
-                    }
-                }
-                if !sub_alias_done {
-                    // Free dead input registers
-                    for i in 0..nb_iargs {
-                        let arg_pos = (nb_oargs + i) as u32;
-                        if life.is_dead(arg_pos) {
-                            let tidx = op.args[nb_oargs + i];
-                            temp_dead(ctx, &mut state, tidx);
-                        }
-                    }
-                    for i in 0..nb_oargs {
-                        let tidx = op.args[i];
-                        let reg = temp_alloc_output(ctx, &mut state, tidx);
-                        oregs.push(reg);
-                    }
-                } else {
-                    // Free dead input registers
-                    for i in 0..nb_iargs {
-                        let arg_pos = (nb_oargs + i) as u32;
-                        if life.is_dead(arg_pos) {
-                            let tidx = op.args[nb_oargs + i];
-                            temp_dead(ctx, &mut state, tidx);
-                        }
-                    }
-                }
-
-                // Collect constant args
-                let cstart = nb_oargs + nb_iargs;
-                let cargs: Vec<u32> =
-                    (0..nb_cargs).map(|i| op.args[cstart + i].0).collect();
-
-                // Emit host code
-                backend.tcg_out_op(buf, ctx, &op, &oregs, &iregs, &cargs);
-
-                // Free dead outputs
-                for i in 0..nb_oargs {
-                    if life.is_dead(i as u32) {
-                        let tidx = op.args[i];
-                        temp_dead(ctx, &mut state, tidx);
-                    }
-                }
-
-                // Sync globals if needed
-                for i in 0..nb_iargs {
-                    let arg_pos = (nb_oargs + i) as u32;
-                    if life.is_sync(arg_pos) {
-                        let tidx = op.args[nb_oargs + i];
-                        temp_sync(ctx, backend, buf, tidx);
-                        ctx.temp_mut(tidx).mem_coherent = true;
-                    }
-                }
-
-                // Sync globals at BB boundaries
+                let ct = backend.op_constraint(op.opc);
+                regalloc_op(ctx, &mut state, backend, buf, &op, ct);
                 if flags.contains(OpFlags::BB_END) {
                     sync_globals(ctx, backend, buf);
                 }
