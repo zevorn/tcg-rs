@@ -1777,26 +1777,30 @@ macro_rules! jcc_case {
 
 #[test]
 fn codegen_sub_alias_rhs_i64() {
+    // Constraints guarantee oregs[0] == iregs[0] (dst == lhs).
     let op = Op::new(OpIdx(0), Opcode::Sub, Type::I64);
     let code = emit_tcg_op_bytes(
         op,
         &[Reg::Rax as u8],
-        &[Reg::Rcx as u8, Reg::Rax as u8],
+        &[Reg::Rax as u8, Reg::Rcx as u8],
         &[],
     );
-    assert_eq!(code, [0x48, 0xF7, 0xD8, 0x48, 0x03, 0xC1]);
+    // REX.W SUB RAX, RCX
+    assert_eq!(code, [0x48, 0x2B, 0xC1]);
 }
 
 #[test]
 fn codegen_sub_alias_rhs_i32() {
+    // Constraints guarantee oregs[0] == iregs[0] (dst == lhs).
     let op = Op::new(OpIdx(0), Opcode::Sub, Type::I32);
     let code = emit_tcg_op_bytes(
         op,
         &[Reg::Rax as u8],
-        &[Reg::Rcx as u8, Reg::Rax as u8],
+        &[Reg::Rax as u8, Reg::Rcx as u8],
         &[],
     );
-    assert_eq!(code, [0xF7, 0xD8, 0x03, 0xC1]);
+    // SUB EAX, ECX
+    assert_eq!(code, [0x2B, 0xC1]);
 }
 
 #[test]
@@ -1810,10 +1814,7 @@ fn codegen_setcond_movzx_sil() {
     );
     assert_eq!(
         code,
-        [
-            0x48, 0x3B, 0xC1, 0x40, 0x0F, 0x94, 0xC6, 0x40, 0x0F, 0xB6,
-            0xF6
-        ]
+        [0x48, 0x3B, 0xC1, 0x40, 0x0F, 0x94, 0xC6, 0x40, 0x0F, 0xB6, 0xF6]
     );
 }
 
@@ -1828,73 +1829,76 @@ fn codegen_setcond_movzx_dil() {
     );
     assert_eq!(
         code,
-        [
-            0x48, 0x3B, 0xC1, 0x40, 0x0F, 0x94, 0xC7, 0x40, 0x0F, 0xB6,
-            0xFF
-        ]
+        [0x48, 0x3B, 0xC1, 0x40, 0x0F, 0x94, 0xC7, 0x40, 0x0F, 0xB6, 0xFF]
     );
 }
 
-emit_case!(
-    movzx_sil_reg,
-    [0x40, 0x0F, 0xB6, 0xC6],
-    |b| emit_movzx(b, OPC_MOVZBL | P_REXB_RM, Reg::Rax, Reg::Rsi)
-);
-emit_case!(
-    movzx_dil_reg,
-    [0x40, 0x0F, 0xB6, 0xC7],
-    |b| emit_movzx(b, OPC_MOVZBL | P_REXB_RM, Reg::Rax, Reg::Rdi)
-);
-emit_case!(
-    movzx_bpl_reg,
-    [0x40, 0x0F, 0xB6, 0xC5],
-    |b| emit_movzx(b, OPC_MOVZBL | P_REXB_RM, Reg::Rax, Reg::Rbp)
-);
-emit_case!(
-    movzx_spl_reg,
-    [0x40, 0x0F, 0xB6, 0xC4],
-    |b| emit_movzx(b, OPC_MOVZBL | P_REXB_RM, Reg::Rax, Reg::Rsp)
-);
-emit_case!(
-    movsx_sil_reg,
-    [0x40, 0x0F, 0xBE, 0xC6],
-    |b| emit_movsx(b, OPC_MOVSBL | P_REXB_RM, Reg::Rax, Reg::Rsi)
-);
-emit_case!(
-    movsx_dil_reg,
-    [0x40, 0x0F, 0xBE, 0xC7],
-    |b| emit_movsx(b, OPC_MOVSBL | P_REXB_RM, Reg::Rax, Reg::Rdi)
-);
-emit_case!(
-    movsx_bpl_reg,
-    [0x40, 0x0F, 0xBE, 0xC5],
-    |b| emit_movsx(b, OPC_MOVSBL | P_REXB_RM, Reg::Rax, Reg::Rbp)
-);
-emit_case!(
-    movsx_spl_reg,
-    [0x40, 0x0F, 0xBE, 0xC4],
-    |b| emit_movsx(b, OPC_MOVSBL | P_REXB_RM, Reg::Rax, Reg::Rsp)
-);
-emit_case!(
-    movzx_r8b_reg,
-    [0x41, 0x0F, 0xB6, 0xC0],
-    |b| emit_movzx(b, OPC_MOVZBL, Reg::Rax, Reg::R8)
-);
-emit_case!(
-    movzx_r15b_reg,
-    [0x41, 0x0F, 0xB6, 0xC7],
-    |b| emit_movzx(b, OPC_MOVZBL, Reg::Rax, Reg::R15)
-);
-emit_case!(
-    store_byte_sil_base_rcx,
-    [0x40, 0x88, 0x71, 0x10],
-    |b| emit_store_byte(b, Reg::Rsi, Reg::Rcx, 0x10)
-);
-emit_case!(
-    store_byte_dil_base_rcx,
-    [0x40, 0x88, 0x79, 0x10],
-    |b| emit_store_byte(b, Reg::Rdi, Reg::Rcx, 0x10)
-);
+emit_case!(movzx_sil_reg, [0x40, 0x0F, 0xB6, 0xC6], |b| emit_movzx(
+    b,
+    OPC_MOVZBL | P_REXB_RM,
+    Reg::Rax,
+    Reg::Rsi
+));
+emit_case!(movzx_dil_reg, [0x40, 0x0F, 0xB6, 0xC7], |b| emit_movzx(
+    b,
+    OPC_MOVZBL | P_REXB_RM,
+    Reg::Rax,
+    Reg::Rdi
+));
+emit_case!(movzx_bpl_reg, [0x40, 0x0F, 0xB6, 0xC5], |b| emit_movzx(
+    b,
+    OPC_MOVZBL | P_REXB_RM,
+    Reg::Rax,
+    Reg::Rbp
+));
+emit_case!(movzx_spl_reg, [0x40, 0x0F, 0xB6, 0xC4], |b| emit_movzx(
+    b,
+    OPC_MOVZBL | P_REXB_RM,
+    Reg::Rax,
+    Reg::Rsp
+));
+emit_case!(movsx_sil_reg, [0x40, 0x0F, 0xBE, 0xC6], |b| emit_movsx(
+    b,
+    OPC_MOVSBL | P_REXB_RM,
+    Reg::Rax,
+    Reg::Rsi
+));
+emit_case!(movsx_dil_reg, [0x40, 0x0F, 0xBE, 0xC7], |b| emit_movsx(
+    b,
+    OPC_MOVSBL | P_REXB_RM,
+    Reg::Rax,
+    Reg::Rdi
+));
+emit_case!(movsx_bpl_reg, [0x40, 0x0F, 0xBE, 0xC5], |b| emit_movsx(
+    b,
+    OPC_MOVSBL | P_REXB_RM,
+    Reg::Rax,
+    Reg::Rbp
+));
+emit_case!(movsx_spl_reg, [0x40, 0x0F, 0xBE, 0xC4], |b| emit_movsx(
+    b,
+    OPC_MOVSBL | P_REXB_RM,
+    Reg::Rax,
+    Reg::Rsp
+));
+emit_case!(movzx_r8b_reg, [0x41, 0x0F, 0xB6, 0xC0], |b| emit_movzx(
+    b,
+    OPC_MOVZBL,
+    Reg::Rax,
+    Reg::R8
+));
+emit_case!(movzx_r15b_reg, [0x41, 0x0F, 0xB6, 0xC7], |b| emit_movzx(
+    b,
+    OPC_MOVZBL,
+    Reg::Rax,
+    Reg::R15
+));
+emit_case!(store_byte_sil_base_rcx, [0x40, 0x88, 0x71, 0x10], |b| {
+    emit_store_byte(b, Reg::Rsi, Reg::Rcx, 0x10)
+});
+emit_case!(store_byte_dil_base_rcx, [0x40, 0x88, 0x79, 0x10], |b| {
+    emit_store_byte(b, Reg::Rdi, Reg::Rcx, 0x10)
+});
 emit_case!(
     store_byte_sil_base_r12,
     [0x41, 0x88, 0x74, 0x24, 0x20],
@@ -1930,56 +1934,54 @@ emit_case!(
     [0x4B, 0x89, 0x44, 0x8C, 0x7F],
     |b| emit_store_sib(b, true, Reg::Rax, Reg::R12, Reg::R9, 2, 0x7F)
 );
-emit_case!(
-    lea_sib_rbp_rdx_disp0,
-    [0x48, 0x8D, 0x44, 0x15, 0x00],
-    |b| emit_lea_sib(b, true, Reg::Rax, Reg::Rbp, Reg::Rdx, 0, 0)
-);
-emit_case!(
-    sib_byte_reg_rex,
-    [0x40, 0x88, 0x34, 0x50],
-    |b| {
-        emit_modrm_sib(
-            b,
-            OPC_MOVB_EvGv | P_REXB_R,
-            Reg::Rsi,
-            Reg::Rax,
-            Reg::Rdx,
-            1,
-            0,
-        )
-    }
-);
-emit_case!(
-    test_rr_extended_64,
-    [0x4D, 0x85, 0xC1],
-    |b| emit_test_rr(b, true, Reg::R8, Reg::R9)
-);
-emit_case!(
-    test_rr_extended_32,
-    [0x45, 0x85, 0xE5],
-    |b| emit_test_rr(b, false, Reg::R12, Reg::R13)
-);
-emit_case!(
-    shift_shl_imm0,
-    [0xC1, 0xE0, 0x00],
-    |b| emit_shift_ri(b, ShiftOp::Shl, false, Reg::Rax, 0)
-);
-emit_case!(
-    shift_shr_imm31,
-    [0xC1, 0xE8, 0x1F],
-    |b| emit_shift_ri(b, ShiftOp::Shr, false, Reg::Rax, 31)
-);
+emit_case!(lea_sib_rbp_rdx_disp0, [0x48, 0x8D, 0x44, 0x15, 0x00], |b| {
+    emit_lea_sib(b, true, Reg::Rax, Reg::Rbp, Reg::Rdx, 0, 0)
+});
+emit_case!(sib_byte_reg_rex, [0x40, 0x88, 0x34, 0x50], |b| {
+    emit_modrm_sib(
+        b,
+        OPC_MOVB_EvGv | P_REXB_R,
+        Reg::Rsi,
+        Reg::Rax,
+        Reg::Rdx,
+        1,
+        0,
+    )
+});
+emit_case!(test_rr_extended_64, [0x4D, 0x85, 0xC1], |b| emit_test_rr(
+    b,
+    true,
+    Reg::R8,
+    Reg::R9
+));
+emit_case!(test_rr_extended_32, [0x45, 0x85, 0xE5], |b| emit_test_rr(
+    b,
+    false,
+    Reg::R12,
+    Reg::R13
+));
+emit_case!(shift_shl_imm0, [0xC1, 0xE0, 0x00], |b| emit_shift_ri(
+    b,
+    ShiftOp::Shl,
+    false,
+    Reg::Rax,
+    0
+));
+emit_case!(shift_shr_imm31, [0xC1, 0xE8, 0x1F], |b| emit_shift_ri(
+    b,
+    ShiftOp::Shr,
+    false,
+    Reg::Rax,
+    31
+));
 emit_case!(
     shift_sar_imm63,
     [0x48, 0xC1, 0xF8, 0x3F],
     |b| emit_shift_ri(b, ShiftOp::Sar, true, Reg::Rax, 63)
 );
-emit_case!(
-    shift_shl_r9_imm0,
-    [0x49, 0xC1, 0xE1, 0x00],
-    |b| emit_shift_ri(b, ShiftOp::Shl, true, Reg::R9, 0)
-);
+emit_case!(shift_shl_r9_imm0, [0x49, 0xC1, 0xE1, 0x00], |b| {
+    emit_shift_ri(b, ShiftOp::Shl, true, Reg::R9, 0)
+});
 emit_case!(
     mov_ri_movabs_u64,
     [0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
@@ -1990,26 +1992,34 @@ emit_case!(
     [0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x80],
     |b| emit_mov_ri(b, true, Reg::Rax, 0xFFFF_FFFF_8000_0000)
 );
-emit_case!(
-    cmovb_test,
-    [0x0F, 0x42, 0xC1],
-    |b| emit_cmovcc(b, X86Cond::Jb, false, Reg::Rax, Reg::Rcx)
-);
-emit_case!(
-    cmovae_test,
-    [0x48, 0x0F, 0x43, 0xC1],
-    |b| emit_cmovcc(b, X86Cond::Jae, true, Reg::Rax, Reg::Rcx)
-);
-emit_case!(
-    cmovl_test,
-    [0x0F, 0x4C, 0xC1],
-    |b| emit_cmovcc(b, X86Cond::Jl, false, Reg::Rax, Reg::Rcx)
-);
-emit_case!(
-    cmovg_test,
-    [0x48, 0x0F, 0x4F, 0xC1],
-    |b| emit_cmovcc(b, X86Cond::Jg, true, Reg::Rax, Reg::Rcx)
-);
+emit_case!(cmovb_test, [0x0F, 0x42, 0xC1], |b| emit_cmovcc(
+    b,
+    X86Cond::Jb,
+    false,
+    Reg::Rax,
+    Reg::Rcx
+));
+emit_case!(cmovae_test, [0x48, 0x0F, 0x43, 0xC1], |b| emit_cmovcc(
+    b,
+    X86Cond::Jae,
+    true,
+    Reg::Rax,
+    Reg::Rcx
+));
+emit_case!(cmovl_test, [0x0F, 0x4C, 0xC1], |b| emit_cmovcc(
+    b,
+    X86Cond::Jl,
+    false,
+    Reg::Rax,
+    Reg::Rcx
+));
+emit_case!(cmovg_test, [0x48, 0x0F, 0x4F, 0xC1], |b| emit_cmovcc(
+    b,
+    X86Cond::Jg,
+    true,
+    Reg::Rax,
+    Reg::Rcx
+));
 
 jcc_case!(jcc_jne_opcode, X86Cond::Jne, 0x85);
 jcc_case!(jcc_jb_opcode, X86Cond::Jb, 0x82);

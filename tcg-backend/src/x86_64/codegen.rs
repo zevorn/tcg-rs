@@ -137,55 +137,49 @@ impl HostCodeGen for X86_64CodeGen {
                     emit_lea_sib(buf, rexw, d, a, b, 0, 0);
                 }
             }
+            // Constraints guarantee oregs[0] == iregs[0]
             Opcode::Sub => {
                 let d = Reg::from_u8(oregs[0]);
-                let a = Reg::from_u8(iregs[0]);
                 let b = Reg::from_u8(iregs[1]);
-                if oregs[0] == iregs[1] && oregs[0] != iregs[0] {
-                    emit_neg(buf, rexw, d);
-                    emit_arith_rr(buf, ArithOp::Add, rexw, d, a);
-                } else {
-                    out_binary_mov(buf, rexw, oregs, iregs);
-                    emit_arith_rr(buf, ArithOp::Sub, rexw, d, b);
-                }
+                emit_arith_rr(buf, ArithOp::Sub, rexw, d, b);
             }
             Opcode::Mul => {
-                if oregs[0] == iregs[1] && oregs[0] != iregs[0] {
-                    emit_imul_rr(
-                        buf,
-                        rexw,
-                        Reg::from_u8(oregs[0]),
-                        Reg::from_u8(iregs[0]),
-                    );
-                } else {
-                    out_binary_mov(buf, rexw, oregs, iregs);
-                    emit_imul_rr(
-                        buf,
-                        rexw,
-                        Reg::from_u8(oregs[0]),
-                        Reg::from_u8(iregs[1]),
-                    );
-                }
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_imul_rr(buf, rexw, d, b);
             }
             Opcode::And => {
-                out_binary_arith(buf, ArithOp::And, rexw, oregs, iregs);
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_arith_rr(buf, ArithOp::And, rexw, d, b);
             }
             Opcode::Or => {
-                out_binary_arith(buf, ArithOp::Or, rexw, oregs, iregs);
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_arith_rr(buf, ArithOp::Or, rexw, d, b);
             }
             Opcode::Xor => {
-                out_binary_arith(buf, ArithOp::Xor, rexw, oregs, iregs);
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_arith_rr(buf, ArithOp::Xor, rexw, d, b);
             }
             Opcode::Neg => {
-                out_unary_mov(buf, rexw, oregs, iregs);
                 emit_neg(buf, rexw, Reg::from_u8(oregs[0]));
             }
             Opcode::Not => {
-                out_unary_mov(buf, rexw, oregs, iregs);
                 emit_not(buf, rexw, Reg::from_u8(oregs[0]));
             }
+            // Constraints guarantee oregs[0] == iregs[0]
+            // and iregs[1] == RCX.
             Opcode::Shl | Opcode::Shr | Opcode::Sar => {
-                out_shift(buf, op.opc, rexw, oregs, iregs);
+                let d = Reg::from_u8(oregs[0]);
+                let sop = match op.opc {
+                    Opcode::Shl => ShiftOp::Shl,
+                    Opcode::Shr => ShiftOp::Shr,
+                    Opcode::Sar => ShiftOp::Sar,
+                    _ => unreachable!(),
+                };
+                emit_shift_cl(buf, sop, rexw, d);
             }
             Opcode::SetCond => {
                 let d = Reg::from_u8(oregs[0]);
@@ -216,9 +210,7 @@ impl HostCodeGen for X86_64CodeGen {
                 if label.has_value {
                     emit_jcc(buf, x86c, label.value);
                 } else {
-                    // Forward ref: emit jcc + placeholder
                     emit_opc(buf, OPC_JCC_long + (x86c as u32), 0, 0);
-                    // placeholder disp32 — patched later
                     buf.emit_u32(0);
                 }
             }
@@ -242,102 +234,10 @@ impl HostCodeGen for X86_64CodeGen {
                 self.emit_goto_tb(buf);
             }
             _ => {
-                panic!("tcg_out_op: unhandled opcode {:?}", op.opc);
+                panic!("tcg_out_op: unhandled {:?}", op.opc,);
             }
         }
     }
-}
-
-// -- Helper functions --
-
-/// Move first input to output register if they differ.
-fn out_binary_mov(
-    buf: &mut CodeBuffer,
-    rexw: bool,
-    oregs: &[u8],
-    iregs: &[u8],
-) {
-    if oregs[0] != iregs[0] {
-        emit_mov_rr(buf, rexw, Reg::from_u8(oregs[0]), Reg::from_u8(iregs[0]));
-    }
-}
-
-fn out_binary_arith(
-    buf: &mut CodeBuffer,
-    aop: ArithOp,
-    rexw: bool,
-    oregs: &[u8],
-    iregs: &[u8],
-) {
-    if oregs[0] == iregs[1] && oregs[0] != iregs[0] {
-        emit_arith_rr(
-            buf,
-            aop,
-            rexw,
-            Reg::from_u8(oregs[0]),
-            Reg::from_u8(iregs[0]),
-        );
-        return;
-    }
-    out_binary_mov(buf, rexw, oregs, iregs);
-    emit_arith_rr(
-        buf,
-        aop,
-        rexw,
-        Reg::from_u8(oregs[0]),
-        Reg::from_u8(iregs[1]),
-    );
-}
-
-fn out_unary_mov(buf: &mut CodeBuffer, rexw: bool, oregs: &[u8], iregs: &[u8]) {
-    if oregs[0] != iregs[0] {
-        emit_mov_rr(buf, rexw, Reg::from_u8(oregs[0]), Reg::from_u8(iregs[0]));
-    }
-}
-
-fn out_shift(
-    buf: &mut CodeBuffer,
-    opc: Opcode,
-    rexw: bool,
-    oregs: &[u8],
-    iregs: &[u8],
-) {
-    let d = Reg::from_u8(oregs[0]);
-    let a = Reg::from_u8(iregs[0]);
-    let count = Reg::from_u8(iregs[1]);
-    let sop = match opc {
-        Opcode::Shl => ShiftOp::Shl,
-        Opcode::Shr => ShiftOp::Shr,
-        Opcode::Sar => ShiftOp::Sar,
-        _ => unreachable!(),
-    };
-    // x86 requires shift count in CL.
-    if iregs[1] != Reg::Rcx as u8 {
-        if oregs[0] == Reg::Rcx as u8 {
-            emit_push(buf, a);
-            emit_mov_rr(buf, true, Reg::Rcx, count);
-            emit_pop(buf, count);
-            emit_shift_cl(buf, sop, rexw, count);
-            emit_mov_rr(buf, rexw, d, count);
-            return;
-        } else {
-            emit_push(buf, Reg::Rcx);
-            emit_mov_rr(buf, true, Reg::Rcx, count);
-            if oregs[0] != iregs[0] {
-                emit_mov_rr(buf, rexw, d, a);
-            }
-            emit_shift_cl(buf, sop, rexw, d);
-            emit_pop(buf, Reg::Rcx);
-            return;
-        }
-    } else if oregs[0] == Reg::Rcx as u8 && oregs[0] != iregs[0] {
-        emit_shift_cl(buf, sop, rexw, a);
-        emit_mov_rr(buf, rexw, d, a);
-        return;
-    } else if oregs[0] != iregs[0] {
-        emit_mov_rr(buf, rexw, d, a);
-    }
-    emit_shift_cl(buf, sop, rexw, d);
 }
 
 fn cond_from_u32(val: u32) -> Cond {

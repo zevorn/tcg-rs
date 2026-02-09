@@ -204,8 +204,9 @@ macro_rules! riscv_mem_case {
                 let t_val = ctx.new_temp(Type::I64);
                 let t_load = ctx.new_temp(Type::I64);
                 let cval = ctx.new_const(Type::I64, $value);
-                let mem_offset =
-                    std::mem::offset_of!(RiscvCpuStateMem, mem) as i64 + $offset;
+                let mem_offset = std::mem::offset_of!(RiscvCpuStateMem, mem)
+                    as i64
+                    + $offset;
 
                 ctx.gen_insn_start(0x4400);
                 ctx.gen_mov(Type::I64, t_val, cval);
@@ -929,20 +930,8 @@ riscv_bin_case!(
     0x00FFu64,
     0xFFFFu64
 );
-riscv_bin_case!(
-    test_xor_case_self,
-    gen_xor,
-    0x1234u64,
-    0x1234u64,
-    0u64
-);
-riscv_bin_case!(
-    test_xor_case_alt,
-    gen_xor,
-    0xAAAAu64,
-    0x5555u64,
-    0xFFFFu64
-);
+riscv_bin_case!(test_xor_case_self, gen_xor, 0x1234u64, 0x1234u64, 0u64);
+riscv_bin_case!(test_xor_case_alt, gen_xor, 0xAAAAu64, 0x5555u64, 0xFFFFu64);
 riscv_bin_case!(
     test_xor_case_large,
     gen_xor,
@@ -959,13 +948,7 @@ riscv_bin_case!(
 );
 
 riscv_bin_case!(test_mul_case_small, gen_mul, 6u64, 7u64, 42u64);
-riscv_bin_case!(
-    test_mul_case_zero,
-    gen_mul,
-    0u64,
-    0x1234u64,
-    0u64
-);
+riscv_bin_case!(test_mul_case_zero, gen_mul, 0u64, 0x1234u64, 0u64);
 riscv_bin_case!(
     test_mul_case_wrap,
     gen_mul,
@@ -1003,13 +986,7 @@ riscv_shift_case!(
     1u64,
     0u64
 );
-riscv_shift_case!(
-    test_shl_case_4,
-    gen_shl,
-    0x1234u64,
-    0u64,
-    0x1234u64
-);
+riscv_shift_case!(test_shl_case_4, gen_shl, 0x1234u64, 0u64, 0x1234u64);
 
 riscv_shift_case!(test_shr_case_1, gen_shr, 0x10u64, 4u64, 0x1u64);
 riscv_shift_case!(
@@ -1049,20 +1026,8 @@ riscv_shift_case!(
     0xFFFF_FFFF_FFFF_FFFFu64
 );
 
-riscv_setcond_case!(
-    test_setcond_eq_case,
-    tcg_core::Cond::Eq,
-    5u64,
-    5u64,
-    1u64
-);
-riscv_setcond_case!(
-    test_setcond_ne_case,
-    tcg_core::Cond::Ne,
-    5u64,
-    6u64,
-    1u64
-);
+riscv_setcond_case!(test_setcond_eq_case, tcg_core::Cond::Eq, 5u64, 5u64, 1u64);
+riscv_setcond_case!(test_setcond_ne_case, tcg_core::Cond::Ne, 5u64, 6u64, 1u64);
 riscv_setcond_case!(
     test_setcond_lt_case,
     tcg_core::Cond::Lt,
@@ -1084,13 +1049,7 @@ riscv_setcond_case!(
     0xFFFF_FFFF_FFFF_FFFFu64,
     1u64
 );
-riscv_setcond_case!(
-    test_setcond_gt_case,
-    tcg_core::Cond::Gt,
-    2u64,
-    1u64,
-    1u64
-);
+riscv_setcond_case!(test_setcond_gt_case, tcg_core::Cond::Gt, 2u64, 1u64, 1u64);
 riscv_setcond_case!(
     test_setcond_ltu_case,
     tcg_core::Cond::Ltu,
@@ -1248,8 +1207,20 @@ fn test_complex_slt_branch_select() {
         let t_no = ctx.new_temp(Type::I64);
 
         ctx.gen_insn_start(0x5020);
-        ctx.gen_setcond(Type::I64, t_cond, regs[1], regs[2], tcg_core::Cond::Lt);
-        ctx.gen_brcond(Type::I64, t_cond, regs[0], tcg_core::Cond::Ne, label_taken);
+        ctx.gen_setcond(
+            Type::I64,
+            t_cond,
+            regs[1],
+            regs[2],
+            tcg_core::Cond::Lt,
+        );
+        ctx.gen_brcond(
+            Type::I64,
+            t_cond,
+            regs[0],
+            tcg_core::Cond::Ne,
+            label_taken,
+        );
 
         ctx.gen_mov(Type::I64, t_no, c_no);
         ctx.gen_mov(Type::I64, regs[7], t_no);
@@ -1287,7 +1258,10 @@ fn test_complex_auipc_addi() {
     });
 
     assert_eq!(exit_val, 0);
-    assert_eq!(cpu.regs[8], cpu.pc.wrapping_add(0xABCDEu64 << 12).wrapping_add(0x123u64));
+    assert_eq!(
+        cpu.regs[8],
+        cpu.pc.wrapping_add(0xABCDEu64 << 12).wrapping_add(0x123u64)
+    );
 }
 
 #[test]
@@ -1384,7 +1358,10 @@ fn test_complex_xor_sub_and() {
     });
 
     assert_eq!(exit_val, 0);
-    assert_eq!(cpu.regs[12], (0xAAAAu64 ^ 0x5555u64).wrapping_sub(0xFF00u64 & 0x0F0Fu64));
+    assert_eq!(
+        cpu.regs[12],
+        (0xAAAAu64 ^ 0x5555u64).wrapping_sub(0xFF00u64 & 0x0F0Fu64)
+    );
 }
 
 #[test]
@@ -1402,7 +1379,13 @@ fn test_complex_branch_fallthrough() {
         let t2 = ctx.new_temp(Type::I64);
 
         ctx.gen_insn_start(0x5080);
-        ctx.gen_brcond(Type::I64, regs[1], regs[2], tcg_core::Cond::Ne, label_taken);
+        ctx.gen_brcond(
+            Type::I64,
+            regs[1],
+            regs[2],
+            tcg_core::Cond::Ne,
+            label_taken,
+        );
         ctx.gen_mov(Type::I64, t1, c1);
         ctx.gen_mov(Type::I64, regs[13], t1);
         ctx.gen_br(label_end);
