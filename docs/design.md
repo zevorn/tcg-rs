@@ -237,7 +237,146 @@ trait HostCodeGen {
 
 ---
 
-## 4. 设计权衡总结
+## 4. 翻译流水线
+
+完整的翻译流水线将 TCG IR 转换为可执行的宿主机器码：
+
+```
+IR Builder (gen_*)  →  Liveness Analysis  →  RegAlloc + Codegen  →  Execute
+  ir_builder.rs          liveness.rs           regalloc.rs         translate.rs
+                                               codegen.rs
+```
+
+### 4.1 IR Builder (`ir_builder.rs`)
+
+`impl Context` 上的 `gen_*` 方法，将高层操作转换为 `Op` 并追加到
+ops 列表。每个方法创建 `Op::with_args()` 并设置正确的 opcode、
+type 和 args 布局。
+
+**常量参数编码**：条件码、偏移量、label ID 等常量参数编码为
+`TempIdx(raw_value as u32)` 存入 `args[]`，与 QEMU 约定一致。
+
+**已实现的 IR 生成方法**：
+
+| 类别 | 方法 | 签名 |
+|------|------|------|
+| 二元 ALU | `gen_add/sub/mul/and/or/xor/shl/shr/sar` | (ty, d, a, b) → d |
+| 一元 | `gen_neg/not/mov` | (ty, d, s) → d |
+| 条件设置 | `gen_setcond` | (ty, d, a, b, cond) → d |
+| 内存访问 | `gen_ld` / `gen_st` | (ty, dst/src, base, offset) |
+| 控制流 | `gen_br/brcond/set_label` | (label_id) / (ty, a, b, cond, label) |
+| TB 出口 | `gen_goto_tb/exit_tb` | (tb_idx) / (val) |
+| 边界 | `gen_insn_start` | (pc) |
+
+### 4.2 活跃性分析 (`liveness.rs`)
+
+反向遍历 ops 列表，为每个 op 计算 `LifeData`，标记哪些参数在
+该 op 之后死亡（dead）以及哪些全局变量需要同步回内存（sync）。
+
+**算法**：
+
+1. 初始化 `temp_state[0..nb_temps]` = false（全部死亡）
+2. TB 末尾：所有全局变量标记为活跃
+3. 反向遍历每个 op：
+   - 遇到 `BB_END` 标志：所有全局变量标记为活跃
+   - 输出参数：若 `!temp_state[tidx]` → 标记 dead；
+     然后 `temp_state[tidx] = false`
+   - 输入参数：若 `!temp_state[tidx]` → 标记 dead（最后使用），
+     若为全局变量则标记 sync；然后 `temp_state[tidx] = true`
+4. 将计算的 `LifeData` 写回 `op.life`
+
+### 4.3 寄存器分配器 (`regalloc.rs`)
+
+贪心逐 op 分配器，前向遍历 ops 列表。MVP 不支持溢出（spill）
+——14 个可分配 GPR 对简单 TB 足够。
+
+**状态**：
+
+```
+RegAllocState {
+    reg_to_temp: [Option<TempIdx>; 16],  // 寄存器→临时变量映射
+    free_regs: RegSet,                    // 空闲寄存器位图
+    allocatable: RegSet,                  // 可分配寄存器集合
+}
+```
+
+**主循环（`regalloc_and_codegen`）**：
+
+对每个 op 按类型分派：
+
+| Op 类型 | 处理策略 |
+|---------|---------|
+| Nop/InsnStart | 跳过 |
+| Mov | 加载源→分配目标→emit host mov |
+| SetLabel | sync globals → 解析 label → back-patch 前向引用 |
+| Br | sync globals → emit jmp（前向引用记录 patch 位置） |
+| BrCond | 加载输入→sync globals→emit cmp+jcc→记录前向引用 |
+| ExitTb/GotoTb | sync globals → 委托 `tcg_out_op` |
+| 通用 op | 加载输入→释放死亡输入→分配输出→`tcg_out_op`→释放死亡输出 |
+
+**关键辅助函数**：
+
+- `temp_load()`：确保 temp 在寄存器中（Const→movi，Mem→ld，Reg→noop）
+- `temp_sync()`：将全局变量写回内存（`tcg_out_st`）
+- `sync_globals()`：在 BB 边界同步所有活跃全局变量
+- `temp_dead()`：释放死亡 temp 的寄存器（全局/固定 temp 不释放）
+- `temp_alloc_output()`：为输出 temp 分配新寄存器
+
+### 4.4 流水线编排 (`translate.rs`)
+
+将各阶段串联为完整流水线：
+
+```
+translate():
+    liveness_analysis(ctx)
+    tb_start = buf.offset()
+    regalloc_and_codegen(ctx, backend, buf)
+    return tb_start
+
+translate_and_execute():
+    buf.set_writable()
+    tb_start = translate(ctx, backend, buf)
+    buf.set_executable()
+    prologue_fn = transmute(buf.base_ptr())
+    return prologue_fn(env, tb_ptr)
+```
+
+**Prologue 调用约定**：
+`fn(env: *mut u8, tb_ptr: *const u8) -> usize`
+- RDI = env 指针（prologue 存入 RBP）
+- RSI = TB 代码地址（prologue 跳转到此处）
+- 返回值 RAX = `exit_tb` 的值
+
+### 4.5 端到端集成测试
+
+`tcg-tests/src/integration/mod.rs` 使用最小 RISC-V CPU 状态
+验证完整流水线：
+
+```rust
+#[repr(C)]
+struct RiscvCpuState {
+    regs: [u64; 32],  // x0-x31, offset 0..256
+    pc: u64,          // offset 256
+}
+```
+
+通过 `ctx.new_global()` 将 x0-x31 和 pc 注册为全局变量，
+backed by `RiscvCpuState` 字段。
+
+**测试用例**：
+
+| 测试 | 验证内容 |
+|------|---------|
+| `test_addi_x1_x0_42` | 常量加法：x1 = x0 + 42 |
+| `test_add_x3_x1_x2` | 寄存器加法：x3 = x1 + x2 |
+| `test_sub_x3_x1_x2` | 寄存器减法：x3 = x1 - x2 |
+| `test_beq_taken` | 条件分支（taken 路径） |
+| `test_beq_not_taken` | 条件分支（not-taken 路径） |
+| `test_sum_loop` | 循环：计算 1+2+3+4+5=15 |
+
+---
+
+## 5. 设计权衡总结
 
 | 决策                   | 选择                  | 理由                     |
 |------------------------|---------------------|--------------------------|
@@ -251,7 +390,7 @@ trait HostCodeGen {
 
 ---
 
-## 5. QEMU 参考映射
+## 6. QEMU 参考映射
 
 | QEMU C 结构/概念               | Rust 对应                       | 文件                                 |
 |-------------------------------|--------------------------------|-------------------------------------|
@@ -277,3 +416,12 @@ trait HostCodeGen {
 | `tcg_out_exit_tb`             | `X86_64CodeGen::emit_exit_tb`  | `tcg-backend/src/x86_64/emitter.rs` |
 | `tcg_out_goto_tb`             | `X86_64CodeGen::emit_goto_tb`  | `tcg-backend/src/x86_64/emitter.rs` |
 | `tcg_out_goto_ptr`            | `X86_64CodeGen::emit_goto_ptr` | `tcg-backend/src/x86_64/emitter.rs` |
+| `tcg_gen_op*` (IR emission)   | `Context::gen_*`               | `tcg-core/src/ir_builder.rs`        |
+| `liveness_pass_1`             | `liveness_analysis()`          | `tcg-backend/src/liveness.rs`       |
+| `tcg_reg_alloc_op`            | `regalloc_and_codegen()`       | `tcg-backend/src/regalloc.rs`       |
+| `tcg_out_op` (dispatch)       | `HostCodeGen::tcg_out_op`      | `tcg-backend/src/x86_64/codegen.rs` |
+| `tcg_out_mov`                 | `HostCodeGen::tcg_out_mov`     | `tcg-backend/src/x86_64/codegen.rs` |
+| `tcg_out_movi`                | `HostCodeGen::tcg_out_movi`    | `tcg-backend/src/x86_64/codegen.rs` |
+| `tcg_out_ld`                  | `HostCodeGen::tcg_out_ld`      | `tcg-backend/src/x86_64/codegen.rs` |
+| `tcg_out_st`                  | `HostCodeGen::tcg_out_st`      | `tcg-backend/src/x86_64/codegen.rs` |
+| `tcg_gen_code`                | `translate()`                  | `tcg-backend/src/translate.rs`      |

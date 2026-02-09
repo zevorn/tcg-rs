@@ -11,6 +11,8 @@
         ↓
 指令发射器 (emit_arith_rr / emit_mov_ri / emit_jcc / ...)
         ↓
+Codegen 分派 (tcg_out_op: IR Opcode → 指令发射器组合)
+        ↓
 X86_64CodeGen (prologue / epilogue / exit_tb / goto_tb)
 ```
 
@@ -185,7 +187,52 @@ x86-64 ModR/M 编码有两个特殊寄存器需要额外处理：
 
 `X86Cond::invert()` 通过翻转低位实现条件取反（如 Je ↔ Jne）。
 
-## 6. QEMU 参考对照
+## 6. Codegen 分派 (`codegen.rs`)
+
+`tcg_out_op` 是寄存器分配器与指令编码器之间的桥梁。它接收已分配
+宿主寄存器的 IR op，将其翻译为一个或多个 x86-64 指令。
+
+### 6.1 HostCodeGen 寄存器分配器原语
+
+| 方法 | 用途 |
+|------|------|
+| `tcg_out_mov(ty, dst, src)` | 寄存器间传送 |
+| `tcg_out_movi(ty, dst, val)` | 加载立即数到寄存器 |
+| `tcg_out_ld(ty, dst, base, offset)` | 从内存加载（全局变量 reload） |
+| `tcg_out_st(ty, src, base, offset)` | 存储到内存（全局变量 sync） |
+
+### 6.2 IR Opcode → x86-64 指令映射
+
+| IR Opcode | x86-64 策略 |
+|-----------|------------|
+| Add | d==a: `add d,b`; d==b: `add d,a`; else: `lea d,[a+b]` |
+| Sub | mov d←a if needed; `sub d,b` |
+| Mul | mov d←a if needed; `imul d,b` |
+| And/Or/Xor | mov d←a if needed; `op d,b` |
+| Shl/Shr/Sar | 移位计数→CL; mov d←a; `shift d,cl`（见 6.3） |
+| Neg/Not | mov d←s if needed; `neg/not d` |
+| SetCond | `cmp a,b`（或 `test a,b`）; `setcc d; movzbl d,d` |
+| BrCond | `cmp a,b`（或 `test a,b`）; `jcc label` |
+| Ld | `mov d,[base+offset]` |
+| St | `mov [base+offset],s` |
+| ExitTb | `mov rax,val; jmp tb_ret`（val==0 时 `jmp epilogue_return_zero`） |
+| GotoTb | `jmp rel32`（可修补，记录偏移） |
+
+### 6.3 移位指令的 CL 处理
+
+x86 要求移位计数必须在 CL 寄存器中。`out_shift` 处理三种情况：
+
+1. **计数已在 RCX**：直接 `shift d,cl`
+2. **目标是 RCX**：通过计数寄存器交换，避免冲突
+3. **一般情况**：`push rcx; mov rcx,count; shift d,cl; pop rcx`
+
+### 6.4 SetCond/BrCond 的 TstEq/TstNe 支持
+
+当条件码为 `TstEq` 或 `TstNe` 时，使用 `test a,b`（按位与测试）
+代替 `cmp a,b`（减法比较）。这对应 QEMU 7.x+ 新增的
+test-and-branch 优化。
+
+## 7. QEMU 参考对照
 
 | tcg-rs 函数 | QEMU 函数 |
 |-------------|-----------|
@@ -198,3 +245,10 @@ x86-64 ModR/M 编码有两个特殊寄存器需要额外处理：
 | `emit_jcc` | `tcg_out_jxx` |
 | `emit_vex_modrm` | `tcg_out_vex_modrm` |
 | `X86_64CodeGen::emit_prologue` | `tcg_target_qemu_prologue` |
+| `X86_64CodeGen::tcg_out_op` | `tcg_out_op` |
+| `X86_64CodeGen::tcg_out_mov` | `tcg_out_mov` |
+| `X86_64CodeGen::tcg_out_movi` | `tcg_out_movi` |
+| `X86_64CodeGen::tcg_out_ld` | `tcg_out_ld` |
+| `X86_64CodeGen::tcg_out_st` | `tcg_out_st` |
+| `out_shift` | `tcg_out_op` (shift cases) |
+| `cond_from_u32` | implicit in QEMU (enum cast) |
