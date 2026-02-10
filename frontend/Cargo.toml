@@ -1,0 +1,7 @@
+[package]
+name = "tcg-frontend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tcg-core = { path = "../core" }
