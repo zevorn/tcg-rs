@@ -145,6 +145,23 @@ impl Context {
         self.emit_unary(Opcode::Mov, ty, d, s)
     }
 
+    // -- Type conversion (1 oarg, 1 iarg) --
+
+    /// Sign-extend i32 → i64.
+    pub fn gen_ext_i32_i64(&mut self, d: TempIdx, s: TempIdx) -> TempIdx {
+        self.emit_unary(Opcode::ExtI32I64, Type::I64, d, s)
+    }
+
+    /// Zero-extend i32 → i64.
+    pub fn gen_ext_u32_i64(&mut self, d: TempIdx, s: TempIdx) -> TempIdx {
+        self.emit_unary(Opcode::ExtUI32I64, Type::I64, d, s)
+    }
+
+    /// Truncate i64 → i32 (low 32 bits).
+    pub fn gen_extrl_i64_i32(&mut self, d: TempIdx, s: TempIdx) -> TempIdx {
+        self.emit_unary(Opcode::ExtrlI64I32, Type::I32, d, s)
+    }
+
     // -- SetCond (1 oarg, 2 iargs, 1 carg) --
 
     pub fn gen_setcond(
@@ -205,6 +222,136 @@ impl Context {
             &[src, base, carg(offset as u32)],
         );
         self.emit_op(op);
+    }
+
+    // -- Sized loads (1 oarg, 1 iarg, 1 carg) --
+
+    fn emit_sized_load(
+        &mut self,
+        opc: Opcode,
+        ty: Type,
+        dst: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) -> TempIdx {
+        let idx = self.next_op_idx();
+        let op = Op::with_args(idx, opc, ty, &[dst, base, carg(offset as u32)]);
+        self.emit_op(op);
+        dst
+    }
+
+    /// Load unsigned byte: dst = *(u8*)(base + offset)
+    pub fn gen_ld8u(
+        &mut self,
+        ty: Type,
+        dst: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) -> TempIdx {
+        self.emit_sized_load(Opcode::Ld8U, ty, dst, base, offset)
+    }
+
+    /// Load signed byte: dst = *(i8*)(base + offset)
+    pub fn gen_ld8s(
+        &mut self,
+        ty: Type,
+        dst: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) -> TempIdx {
+        self.emit_sized_load(Opcode::Ld8S, ty, dst, base, offset)
+    }
+
+    /// Load unsigned halfword: dst = *(u16*)(base + offset)
+    pub fn gen_ld16u(
+        &mut self,
+        ty: Type,
+        dst: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) -> TempIdx {
+        self.emit_sized_load(Opcode::Ld16U, ty, dst, base, offset)
+    }
+
+    /// Load signed halfword: dst = *(i16*)(base + offset)
+    pub fn gen_ld16s(
+        &mut self,
+        ty: Type,
+        dst: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) -> TempIdx {
+        self.emit_sized_load(Opcode::Ld16S, ty, dst, base, offset)
+    }
+
+    /// Load unsigned word: dst = *(u32*)(base + offset)
+    pub fn gen_ld32u(
+        &mut self,
+        ty: Type,
+        dst: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) -> TempIdx {
+        self.emit_sized_load(Opcode::Ld32U, ty, dst, base, offset)
+    }
+
+    /// Load signed word: dst = *(i32*)(base + offset)
+    pub fn gen_ld32s(
+        &mut self,
+        ty: Type,
+        dst: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) -> TempIdx {
+        self.emit_sized_load(Opcode::Ld32S, ty, dst, base, offset)
+    }
+
+    // -- Sized stores (0 oargs, 2 iargs, 1 carg) --
+
+    fn emit_sized_store(
+        &mut self,
+        opc: Opcode,
+        ty: Type,
+        src: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) {
+        let idx = self.next_op_idx();
+        let op = Op::with_args(idx, opc, ty, &[src, base, carg(offset as u32)]);
+        self.emit_op(op);
+    }
+
+    /// Store byte: *(u8*)(base + offset) = src
+    pub fn gen_st8(
+        &mut self,
+        ty: Type,
+        src: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) {
+        self.emit_sized_store(Opcode::St8, ty, src, base, offset);
+    }
+
+    /// Store halfword: *(u16*)(base + offset) = src
+    pub fn gen_st16(
+        &mut self,
+        ty: Type,
+        src: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) {
+        self.emit_sized_store(Opcode::St16, ty, src, base, offset);
+    }
+
+    /// Store word: *(u32*)(base + offset) = src
+    pub fn gen_st32(
+        &mut self,
+        ty: Type,
+        src: TempIdx,
+        base: TempIdx,
+        offset: i64,
+    ) {
+        self.emit_sized_store(Opcode::St32, ty, src, base, offset);
     }
 
     // -- Control flow --
