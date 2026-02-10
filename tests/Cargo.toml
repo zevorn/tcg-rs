@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 tcg-core = { path = "../core" }
 tcg-backend = { path = "../backend" }
+tcg-frontend = { path = "../frontend" }
