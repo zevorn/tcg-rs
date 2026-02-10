@@ -104,7 +104,7 @@ impl TranslatorOps for RiscvTranslator {
         ctx.cur_insn_len = 4;
 
         // Dispatch through decodetree-generated decoder.
-        if !insn_decode::decode(ctx, insn) {
+        if !insn_decode::decode(ctx, ir, insn) {
             // Unrecognized instruction — sync PC and exit.
             let pc_val = ctx.base.pc_next;
             let pc_const = ir.new_const(Type::I64, pc_val);
