@@ -1,6 +1,9 @@
 //! RISC-V frontend — RV64 user-mode instruction translation.
 
 pub mod cpu;
+#[allow(dead_code)]
+mod insn_decode;
+mod trans;
 
 use crate::{DisasContextBase, DisasJumpType, TranslatorOps};
 use cpu::{gpr_offset, NUM_GPRS, PC_OFFSET};
@@ -100,13 +103,15 @@ impl TranslatorOps for RiscvTranslator {
         ctx.opcode = insn;
         ctx.cur_insn_len = 4;
 
-        // TODO: dispatch to decodetree-generated decoder
-        // For now, emit illegal-instruction exit.
-        let pc_val = ctx.base.pc_next;
-        let pc_const = ir.new_const(Type::I64, pc_val);
-        ir.gen_mov(Type::I64, ctx.pc, pc_const);
-        ir.gen_exit_tb(0);
-        ctx.base.is_jmp = DisasJumpType::NoReturn;
+        // Dispatch through decodetree-generated decoder.
+        if !insn_decode::decode(ctx, insn) {
+            // Unrecognized instruction — sync PC and exit.
+            let pc_val = ctx.base.pc_next;
+            let pc_const = ir.new_const(Type::I64, pc_val);
+            ir.gen_mov(Type::I64, ctx.pc, pc_const);
+            ir.gen_exit_tb(0);
+            ctx.base.is_jmp = DisasJumpType::NoReturn;
+        }
 
         ctx.base.pc_next += ctx.cur_insn_len as u64;
     }
