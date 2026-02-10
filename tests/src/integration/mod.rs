@@ -930,13 +930,7 @@ riscv_bin_case!(
     0x0FF0u64,
     0x00F0u64
 );
-riscv_bin_case!(
-    test_and_case_zero,
-    gen_and,
-    0x1234u64,
-    0u64,
-    0u64
-);
+riscv_bin_case!(test_and_case_zero, gen_and, 0x1234u64, 0u64, 0u64);
 riscv_bin_case!(
     test_and_case_high,
     gen_and,
@@ -1565,13 +1559,7 @@ fn test_countdown_loop_sum() {
         ctx.gen_mov(Type::I64, regs[2], t_sum);
         ctx.gen_sub(Type::I64, t_cnt, regs[1], c1);
         ctx.gen_mov(Type::I64, regs[1], t_cnt);
-        ctx.gen_brcond(
-            Type::I64,
-            regs[1],
-            c0,
-            tcg_core::Cond::Ne,
-            label_loop,
-        );
+        ctx.gen_brcond(Type::I64, regs[1], c0, tcg_core::Cond::Ne, label_loop);
         ctx.gen_exit_tb(0);
     });
 
@@ -1589,7 +1577,8 @@ fn test_mem_store_overwrite() {
         let t1 = ctx.new_temp(Type::I64);
         let t2 = ctx.new_temp(Type::I64);
         let t_load = ctx.new_temp(Type::I64);
-        let mem_offset = std::mem::offset_of!(RiscvCpuStateMem, mem) as i64 + 16;
+        let mem_offset =
+            std::mem::offset_of!(RiscvCpuStateMem, mem) as i64 + 16;
 
         ctx.gen_insn_start(0x5150);
         ctx.gen_mov(Type::I64, t1, v1);
