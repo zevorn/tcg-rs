@@ -1,3 +1,3 @@
 [workspace]
-members = ["core", "backend", "frontend", "tests"]
+members = ["core", "backend", "frontend", "decodetree", "tests"]
 resolver = "2"
