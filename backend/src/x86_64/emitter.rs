@@ -613,6 +613,11 @@ pub fn emit_store_byte(buf: &mut CodeBuffer, src: Reg, base: Reg, offset: i32) {
     emit_modrm_offset(buf, OPC_MOVB_EvGv | P_REXB_R, src, base, offset);
 }
 
+/// Emit MOV word [base+offset], reg (16-bit store).
+pub fn emit_store_word(buf: &mut CodeBuffer, src: Reg, base: Reg, offset: i32) {
+    emit_modrm_offset(buf, P_DATA16 | OPC_MOVL_EvGv, src, base, offset);
+}
+
 /// Emit MOV [base+offset], imm32 (store immediate).
 pub fn emit_store_imm(
     buf: &mut CodeBuffer,

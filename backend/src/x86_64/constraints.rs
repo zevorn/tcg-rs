@@ -42,13 +42,24 @@ pub fn op_constraint(opc: Opcode) -> &'static OpConstraint {
             &C
         }
         // -- Load: output, base input --
-        Opcode::Ld => {
+        Opcode::Ld
+        | Opcode::Ld8U
+        | Opcode::Ld8S
+        | Opcode::Ld16U
+        | Opcode::Ld16S
+        | Opcode::Ld32U
+        | Opcode::Ld32S => {
             static C: OpConstraint = o1_i1(R, R);
             &C
         }
         // -- Store: value input, base input --
-        Opcode::St => {
+        Opcode::St | Opcode::St8 | Opcode::St16 | Opcode::St32 => {
             static C: OpConstraint = o0_i2(R, R);
+            &C
+        }
+        // -- Type conversions: output, input --
+        Opcode::ExtI32I64 | Opcode::ExtUI32I64 | Opcode::ExtrlI64I32 => {
+            static C: OpConstraint = o1_i1(R, R);
             &C
         }
         _ => &OpConstraint::EMPTY,

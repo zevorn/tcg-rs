@@ -220,11 +220,91 @@ impl HostCodeGen for X86_64CodeGen {
                 let offset = cargs[0] as i32;
                 emit_load(buf, rexw, d, base, offset);
             }
+            Opcode::Ld8U => {
+                let d = Reg::from_u8(oregs[0]);
+                let base = Reg::from_u8(iregs[0]);
+                let offset = cargs[0] as i32;
+                emit_load_zx(buf, OPC_MOVZBL, d, base, offset);
+            }
+            Opcode::Ld8S => {
+                let d = Reg::from_u8(oregs[0]);
+                let base = Reg::from_u8(iregs[0]);
+                let offset = cargs[0] as i32;
+                let opc = if rexw {
+                    OPC_MOVSBL | P_REXW
+                } else {
+                    OPC_MOVSBL
+                };
+                emit_load_sx(buf, opc, d, base, offset);
+            }
+            Opcode::Ld16U => {
+                let d = Reg::from_u8(oregs[0]);
+                let base = Reg::from_u8(iregs[0]);
+                let offset = cargs[0] as i32;
+                emit_load_zx(buf, OPC_MOVZWL, d, base, offset);
+            }
+            Opcode::Ld16S => {
+                let d = Reg::from_u8(oregs[0]);
+                let base = Reg::from_u8(iregs[0]);
+                let offset = cargs[0] as i32;
+                let opc = if rexw {
+                    OPC_MOVSWL | P_REXW
+                } else {
+                    OPC_MOVSWL
+                };
+                emit_load_sx(buf, opc, d, base, offset);
+            }
+            Opcode::Ld32U => {
+                let d = Reg::from_u8(oregs[0]);
+                let base = Reg::from_u8(iregs[0]);
+                let offset = cargs[0] as i32;
+                // MOV r32, [mem] implicitly zero-extends
+                emit_load(buf, false, d, base, offset);
+            }
+            Opcode::Ld32S => {
+                let d = Reg::from_u8(oregs[0]);
+                let base = Reg::from_u8(iregs[0]);
+                let offset = cargs[0] as i32;
+                emit_load_sx(buf, OPC_MOVSLQ, d, base, offset);
+            }
             Opcode::St => {
                 let src = Reg::from_u8(iregs[0]);
                 let base = Reg::from_u8(iregs[1]);
                 let offset = cargs[0] as i32;
                 emit_store(buf, rexw, src, base, offset);
+            }
+            Opcode::St8 => {
+                let src = Reg::from_u8(iregs[0]);
+                let base = Reg::from_u8(iregs[1]);
+                let offset = cargs[0] as i32;
+                emit_store_byte(buf, src, base, offset);
+            }
+            Opcode::St16 => {
+                let src = Reg::from_u8(iregs[0]);
+                let base = Reg::from_u8(iregs[1]);
+                let offset = cargs[0] as i32;
+                emit_store_word(buf, src, base, offset);
+            }
+            Opcode::St32 => {
+                let src = Reg::from_u8(iregs[0]);
+                let base = Reg::from_u8(iregs[1]);
+                let offset = cargs[0] as i32;
+                emit_store(buf, false, src, base, offset);
+            }
+            // -- Type conversions --
+            Opcode::ExtI32I64 => {
+                let d = Reg::from_u8(oregs[0]);
+                let s = Reg::from_u8(iregs[0]);
+                emit_movsx(buf, OPC_MOVSLQ, d, s);
+            }
+            Opcode::ExtUI32I64 | Opcode::ExtrlI64I32 => {
+                let d = Reg::from_u8(oregs[0]);
+                let s = Reg::from_u8(iregs[0]);
+                // MOV r32, r32 zero-extends to 64 bits
+                // (also works as truncate: just ignore high bits)
+                if d != s {
+                    emit_mov_rr(buf, false, d, s);
+                }
             }
             Opcode::ExitTb => {
                 let val = cargs[0] as u64;
