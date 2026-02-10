@@ -35,7 +35,7 @@ Signed-off-by: Name <email>
 **Subject 行规则**：
 
 - 格式为 `module: subject`，其中 `module` 是受影响的主要模块名
-- 常用 module 名：`tcg-core`、`tcg-backend`、`tcg-tests`、`docs`、`project`（跨模块变更）
+- 常用 module 名：`tcg-core`、`tcg-backend`、`tcg-frontend`、`decodetree`、`tcg-tests`、`docs`、`project`（跨模块变更）
 - subject 使用小写开头，祈使语气（如 `add`、`fix`、`remove`），不加句号
 - 总长度不超过 72 字符
 
@@ -83,7 +83,7 @@ Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen
 
 | QEMU C 结构 | Rust 等价物 | 用途 |
 |-------------|------------|------|
-| `TCGOpcode`（DEF 宏枚举） | `enum Opcode` | ~70 个统一多态 IR opcodes |
+| `TCGOpcode`（DEF 宏枚举） | `enum Opcode` | 158 个统一多态 IR opcodes |
 | `TCGType` | `enum Type { I32, I64, I128, V64, V128, V256 }` | IR 值类型 |
 | `TCGTemp` | `struct Temp` | IR 变量（global、local、const、fixed-reg） |
 | `TCGTempKind` | `enum TempKind { Ebb, Tb, Global, Fixed, Const }` | 变量生命周期/作用域 |

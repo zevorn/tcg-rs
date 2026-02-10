@@ -3,8 +3,10 @@
 ## 项目结构与模块组织
 - core/: IR 类型、操作码、临时变量、标签与 IR builder（gen_*）。
 - backend/: 活跃分析、约束系统、寄存器分配与 x86-64 代码生成。
-- tests/: 后端回归与端到端 IR/TB 执行测试。
-- docs/: 设计与后端文档。
+- decodetree/: QEMU 风格 .decode 文件解析器与 Rust 代码生成器。
+- frontend/: 客户指令解码框架与 RISC-V RV64I+M 前端。
+- tests/: 单元测试、后端回归、前端翻译、差分测试与端到端集成测试。
+- docs/: 设计、后端与 difftest 文档。
 
 ## 构建、测试与开发命令
     cargo build                 # 构建全部 crate
@@ -25,6 +27,8 @@
 - 测试命名采用 test_*，保持用例窄、确定性强。
 - 后端回归放在 tests/src/backend/，IR/TB 执行用例放在
   tests/src/integration/。
+- 前端翻译测试放在 tests/src/frontend/，差分测试（difftest）
+  放在 tests/src/frontend/difftest.rs。
 - 修复缺陷时必须补充覆盖该场景的回归测试。
 
 ## 提交与 PR 指南

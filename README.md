@@ -5,16 +5,19 @@
 
 A Rust reimplementation of [QEMU](https://www.qemu.org/)'s **TCG** (Tiny Code Generator) — the dynamic binary translation engine that converts guest architecture instructions into host machine code at runtime.
 
-> **Status**: The complete translation pipeline is working — IR builder, liveness analysis, constraint-driven register allocator, and x86-64 codegen produce executable host code from TCG IR.
+> **Status**: The complete translation pipeline is working end-to-end — RISC-V guest instructions are decoded via a decodetree-generated decoder, translated to TCG IR, optimized through liveness analysis, register-allocated, compiled to x86-64 machine code, and executed. A differential testing framework validates correctness against QEMU.
 
 ## Overview
 
 tcg-rs aims to provide a clean, safe, and modular Rust implementation of QEMU's TCG subsystem. The project follows QEMU's proven architecture while leveraging Rust's type system, memory safety, and trait-based extensibility.
 
 ```
-IR Builder (gen_*)  ->  Liveness Analysis  ->  RegAlloc + Codegen  ->  Execute
-  ir_builder.rs          liveness.rs           regalloc.rs          translate.rs
-                                               codegen.rs
+┌──────────────┐    ┌───────────────┐    ┌──────────────┐    ┌──────────┐    ┌──────────────────┐    ┌─────────┐
+│ Guest Binary │───→│ Frontend      │───→│ IR Builder   │───→│ Liveness │───→│ RegAlloc+Codegen │───→│ Execute │
+│ (RISC-V)     │    │ (decodetree   │    │ (gen_*)      │    │ Analysis │    │ (x86-64)         │    │ (JIT)   │
+└──────────────┘    │  + trans_*)   │    └──────────────┘    └──────────┘    └──────────────────┘    └─────────┘
+                    └───────────────┘
+                     tcg-frontend         tcg-core            tcg-backend     tcg-backend             tcg-backend
 ```
 
 ## Crate Structure
@@ -23,9 +26,10 @@ IR Builder (gen_*)  ->  Liveness Analysis  ->  RegAlloc + Codegen  ->  Execute
 |-------|--------|-------------|
 | `tcg-core` | Implemented | IR definitions (opcodes, types, temps, ops, context, labels, TBs) + IR builder (`gen_*` methods) |
 | `tcg-backend` | Implemented | Liveness analysis, constraint system, register allocator, x86-64 codegen, translation pipeline |
-| `tcg-tests` | Implemented | 522 tests: unit, backend regression, and end-to-end integration |
+| `decodetree` | Implemented | QEMU-style `.decode` file parser and Rust code generator for instruction decoders |
+| `tcg-frontend` | Implemented | Guest instruction decoding framework + RISC-V RV64I+M frontend (65 instructions) |
+| `tcg-tests` | Implemented | 688 tests: unit, backend regression, frontend translation, difftest (vs QEMU), and end-to-end integration |
 | `tcg-opt` | Planned | IR optimizer: constant/copy propagation, DCE |
-| `tcg-frontend` | Planned | Guest instruction decoding trait + per-arch decoders |
 | `tcg-exec` | Planned | CPU execution loop, TB cache, TB linking/invalidation |
 | `tcg-mmu` | Planned | Software TLB, guest memory access |
 | `tcg-runtime` | Planned | Runtime helper functions called from generated code |
@@ -42,7 +46,7 @@ IR Builder (gen_*)  ->  Liveness Analysis  ->  RegAlloc + Codegen  ->  Execute
 
 ```bash
 cargo build                  # Build all crates
-cargo test                   # Run all 522 tests
+cargo test                   # Run all 688 tests
 cargo clippy -- -D warnings  # Lint check
 cargo fmt --check            # Format check
 ```
@@ -52,7 +56,7 @@ cargo fmt --check            # Format check
 ### tcg-core
 
 - **Type system**: `Type` (I32/I64/I128/V64/V128/V256), `Cond` (QEMU-compatible encoding), `MemOp` (bit-packed), `RegSet` (u64 bitmap)
-- **Opcodes**: ~70 unified opcodes with static `OpDef` table, `OpFlags` for properties
+- **Opcodes**: 158 unified opcodes with static `OpDef` table, `OpFlags` for properties
 - **Temporaries**: Five lifetime kinds (Ebb, Tb, Global, Fixed, Const) with register allocator state
 - **Labels**: Forward reference support with back-patching via `LabelUse`/`RelocKind`
 - **Operations**: `Op` with fixed-size args array, `LifeData` for liveness
@@ -77,7 +81,25 @@ cargo fmt --check            # Format check
 
 - **Unit tests**: Core data structure APIs (types, opcodes, temps, labels, ops, context, TBs)
 - **Backend regression**: x86-64 instruction encoding, codegen aliasing behavior
+- **Frontend translation**: 58 RISC-V instruction tests through the full decode→IR→codegen→execute pipeline
+- **Difftest**: Differential testing framework comparing tcg-rs results against QEMU (qemu-riscv64 user-mode) with edge-case values
 - **Integration tests**: End-to-end pipeline with minimal RISC-V CPU state — ALU ops, branches, loops, memory access, complex multi-op sequences
+
+### decodetree
+
+- **Parser**: Parses QEMU-style `.decode` files (fields, argument sets, formats, patterns with bit-level matching)
+- **Code generator**: Emits Rust code — `Args*` structs, `extract_*` functions, `Decode<Ir>` trait with `trans_*` methods, and `decode()` dispatch function
+- **Build integration**: `frontend/build.rs` invokes decodetree at compile time to generate the RISC-V instruction decoder
+
+### tcg-frontend
+
+- **Translation framework** (`lib.rs`): `TranslatorOps` trait and `translator_loop()` — architecture-independent instruction translation loop
+- **RISC-V frontend** (`riscv/`):
+  - `cpu.rs`: `RiscvCpu` state (`#[repr(C)]`, 32 GPRs + PC)
+  - `mod.rs`: `RiscvDisasContext` with GPRs as TCG globals, `RiscvTranslator` implementing `TranslatorOps`
+  - `trans.rs`: 65 `trans_*` methods implementing `Decode<Context>` trait, using QEMU-style `gen_xxx` helper pattern with `BinOp` function pointers
+  - Implemented: lui, auipc, jal, jalr, branches (beq/bne/blt/bge/bltu/bgeu), ALU immediate, shifts, R-type ALU, RV64I W-suffix ops, fence, ecall, ebreak
+  - Stubs: load/store (need guest memory access), M extension (need mul/div IR ops)
 
 ## QEMU Reference
 
@@ -89,11 +111,16 @@ This project references the following QEMU source files:
 - `tcg/i386/tcg-target.c.inc` — x86-64 backend + constraint table (`tcg_target_op_def`)
 - `include/tcg/tcg.h` — `TCGArgConstraint`, `TCGTemp`, `TCGContext`
 - `include/tcg/tcg-opc.h` — Opcode definitions
+- `target/riscv/translate.c` — RISC-V frontend translation
+- `target/riscv/insn_trans/trans_rvi.c.inc` — RV64I instruction translation helpers
+- `accel/tcg/translator.c` — `translator_loop` (architecture-independent translation loop)
+- `docs/devel/decodetree.rst` — Decodetree pattern-based instruction decoder generator
 
 ## Documentation
 
 - [Design Document](docs/design.md) — Architecture, data structures, constraint system, translation pipeline
 - [x86-64 Backend](docs/x86_64-backend.md) — Instruction encoder, constraint table, codegen dispatch
+- [Difftest Framework](docs/difftest.md) — Differential testing against QEMU (qemu-riscv64)
 - [Coding Style](docs/coding-style.md) — Naming conventions, formatting rules
 
 ## License

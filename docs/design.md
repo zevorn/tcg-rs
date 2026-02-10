@@ -6,10 +6,12 @@
 tcg-rs/
 ├── core/           # IR 定义层：纯数据结构，零依赖
 ├── backend/        # 代码生成层：依赖 tcg-core + libc
-└── tests/          # 测试层：依赖 tcg-core + tcg-backend
+├── decodetree/     # 解码器生成器：解析 .decode 文件，生成 Rust 解码器
+├── frontend/       # 客户指令解码层：依赖 tcg-core + decodetree（构建时）
+└── tests/          # 测试层：依赖 tcg-core + tcg-backend + tcg-frontend
 ```
 
-**设计意图**：遵循 QEMU 的 `include/tcg/` (定义) 与 `tcg/` (实现) 分离原则。`tcg-core` 是纯粹的数据定义，不包含任何平台相关代码或 `unsafe`，未来的 `tcg-ir`、`tcg-opt`、`tcg-frontend` 都只需依赖 `tcg-core`。测试独立成 crate 是为了保持源码文件干净，且外部 crate 测试能验证公共 API 的完整性。
+**设计意图**：遵循 QEMU 的 `include/tcg/` (定义) 与 `tcg/` (实现) 分离原则。`tcg-core` 是纯粹的数据定义，不包含任何平台相关代码或 `unsafe`，`tcg-frontend` 和未来的 `tcg-opt` 都只需依赖 `tcg-core`。`decodetree` 是独立的构建时工具 crate，解析 QEMU 风格的 `.decode` 文件并生成 Rust 解码器代码。测试独立成 crate 是为了保持源码文件干净，且外部 crate 测试能验证公共 API 的完整性。
 
 ---
 
@@ -56,14 +58,14 @@ RegSet(u64) — 64-bit bitmap, supports up to 64 host registers
 ### 2.5 统一多态 Opcode (`opcode.rs`)
 
 ```
-enum Opcode { Mov, Add, Sub, ..., Count }  // ~70 variants + sentinel
+enum Opcode { Mov, Add, Sub, ..., Count }  // 158 variants + sentinel
 ```
 
 **关键决策：类型多态而非类型分裂**
 
 QEMU 原始设计中 `add_i32` 和 `add_i64` 是不同的 opcode。我们改为统一的 `Add`，实际类型由 `Op::op_type` 字段携带。原因：
 
-1. 减少 opcode 数量约 40%（从 ~150 降到 ~70）
+1. 减少 opcode 数量（统一多态设计）
 2. 优化器可以用统一逻辑处理，不需要 `match (Add32, Add64) => ...`
 3. 后端通过 `op.op_type` 选择 32/64 位指令编码，逻辑更清晰
 4. `OpFlags::INT` 标记哪些 opcode 是多态的，非多态的（如 `ExtI32I64`）有固定类型
@@ -283,9 +285,9 @@ struct OpConstraint {
 完整的翻译流水线将 TCG IR 转换为可执行的宿主机器码：
 
 ```
-IR Builder (gen_*)  →  Liveness Analysis  →  RegAlloc + Codegen  →  Execute
-  ir_builder.rs          liveness.rs           regalloc.rs         translate.rs
-                                               codegen.rs
+Guest Binary → Frontend (decode) → IR Builder (gen_*) → Liveness → RegAlloc + Codegen → Execute
+                riscv/trans.rs      ir_builder.rs        liveness.rs  regalloc.rs        translate.rs
+                                                                      codegen.rs
 ```
 
 ### 4.1 IR Builder (`ir_builder.rs`)
@@ -728,6 +730,78 @@ backed by `RiscvCpuState` 字段。
 | `test_beq_not_taken` | 条件分支（not-taken 路径） |
 | `test_sum_loop` | 循环：计算 1+2+3+4+5=15 |
 
+### 4.6 前端翻译框架
+
+#### 4.6.1 decodetree 解码器生成器
+
+`decodetree` crate 实现了 QEMU 的 decodetree 工具的 Rust 版本，解析 `.decode` 文件并生成 Rust 解码器代码。
+
+**输入**：`frontend/decode/riscv32.decode`（65 个 RISC-V 指令模式）
+
+**生成的代码**：
+- `Args*` 结构体：每个参数集对应一个结构体（如 `ArgsR { rd, rs1, rs2 }`）
+- `extract_*` 函数：从 32 位指令字中提取字段（支持多段拼接、符号扩展）
+- `Decode<Ir>` trait：每个模式对应一个 `trans_*` 方法
+- `decode()` 函数：if-else 链按 fixedmask/fixedbits 匹配指令
+
+**构建集成**：`frontend/build.rs` 在编译时调用 `decodetree::generate()`，输出到 `$OUT_DIR/riscv32_decode.rs`，通过 `include!` 宏引入。
+
+#### 4.6.2 TranslatorOps trait
+
+`frontend/src/lib.rs` 定义了架构无关的翻译框架：
+
+```rust
+trait TranslatorOps {
+    type Disas;
+    fn init_disas_context(ctx: &mut Self::Disas, ir: &mut Context);
+    fn tb_start(ctx: &mut Self::Disas, ir: &mut Context);
+    fn insn_start(ctx: &mut Self::Disas, ir: &mut Context);
+    fn translate_insn(ctx: &mut Self::Disas, ir: &mut Context);
+    fn tb_stop(ctx: &mut Self::Disas, ir: &mut Context);
+}
+```
+
+`translator_loop()` 实现了 QEMU `accel/tcg/translator.c` 中的翻译循环：`tb_start → (insn_start + translate_insn)* → tb_stop`。
+
+#### 4.6.3 RISC-V 前端
+
+**CPU 状态**（`riscv/cpu.rs`）：
+
+```rust
+#[repr(C)]
+struct RiscvCpu {
+    gpr: [u64; 32],  // x0-x31, offset 0..256
+    pc: u64,          // offset 256
+}
+```
+
+**翻译上下文**（`riscv/mod.rs`）：`RiscvDisasContext` 将 32 个 GPR 和 PC 注册为 TCG 全局变量（backed by `RiscvCpu` 字段），env 指针固定到 RBP。
+
+**指令翻译**（`riscv/trans.rs`）：实现 `Decode<Context>` trait 的 65 个 `trans_*` 方法，使用 QEMU 风格的 `gen_xxx` 辅助函数模式：
+
+```rust
+type BinOp = fn(&mut Context, Type, TempIdx, TempIdx, TempIdx) -> TempIdx;
+
+fn gen_arith(&self, ir: &mut Context, a: &ArgsR, op: BinOp) -> bool;
+fn gen_arith_imm(&self, ir: &mut Context, a: &ArgsI, op: BinOp) -> bool;
+fn gen_shift_imm(&self, ir: &mut Context, a: &ArgsShift, op: BinOp) -> bool;
+fn gen_arith_w(&self, ir: &mut Context, a: &ArgsR, op: BinOp) -> bool;
+fn gen_branch(&mut self, ir: &mut Context, rs1: usize, rs2: usize, imm: i64, cond: Cond) -> bool;
+```
+
+每个 `trans_*` 方法成为一行调用，如 `trans_add → gen_arith(ir, a, Context::gen_add)`。
+
+### 4.7 测试体系
+
+| 测试类别 | 位置 | 数量 | 说明 |
+|---------|------|------|------|
+| decodetree 单元测试 | `decodetree/src/lib.rs` | 58 | 解析器、代码生成、字段提取 |
+| 核心单元测试 | `tests/src/core/` | ~200 | types/opcodes/temps/labels/ops/context/TBs |
+| 后端回归测试 | `tests/src/backend/` | ~300 | x86-64 指令编码、codegen 别名 |
+| 前端翻译测试 | `tests/src/frontend/mod.rs` | 58 | 全流水线 RISC-V 指令测试 |
+| 差分测试 | `tests/src/frontend/difftest.rs` | 35 | 对比 QEMU qemu-riscv64 |
+| 集成测试 | `tests/src/integration/` | ~30 | 端到端 IR→执行 |
+
 ---
 
 ## 5. 设计权衡总结
@@ -782,3 +856,8 @@ backed by `RiscvCpuState` 字段。
 | `tcg_out_ld`                  | `HostCodeGen::tcg_out_ld`      | `backend/src/x86_64/codegen.rs` |
 | `tcg_out_st`                  | `HostCodeGen::tcg_out_st`      | `backend/src/x86_64/codegen.rs` |
 | `tcg_gen_code`                | `translate()`                  | `backend/src/translate.rs`      |
+| `translator_loop`             | `translator_loop()`            | `frontend/src/lib.rs`           |
+| `DisasContextBase`            | `DisasContextBase`             | `frontend/src/lib.rs`           |
+| `disas_log` (decodetree)      | `decodetree::generate()`       | `decodetree/src/lib.rs`         |
+| `target/riscv/translate.c`    | `RiscvDisasContext`            | `frontend/src/riscv/mod.rs`     |
+| `trans_rvi.c.inc` (gen_xxx)   | `gen_arith/gen_branch/...`     | `frontend/src/riscv/trans.rs`   |
