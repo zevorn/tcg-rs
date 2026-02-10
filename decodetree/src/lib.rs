@@ -415,10 +415,7 @@ fn emit_extract_field(w: &mut dyn Write, field: &Field) -> std::io::Result<()> {
             let lshift = 32 - s.pos - s.len;
             let rshift = 32 - s.len;
             if lshift == 0 {
-                writeln!(
-                    w,
-                    "    let val = (insn as i32) >> {rshift};",
-                )?;
+                writeln!(w, "    let val = (insn as i32) >> {rshift};",)?;
             } else {
                 writeln!(
                     w,
@@ -428,11 +425,7 @@ fn emit_extract_field(w: &mut dyn Write, field: &Field) -> std::io::Result<()> {
             }
         } else {
             let mask = (1u32 << s.len) - 1;
-            writeln!(
-                w,
-                "    let val = (insn >> {}) & {:#x};",
-                s.pos, mask
-            )?;
+            writeln!(w, "    let val = (insn >> {}) & {:#x};", s.pos, mask)?;
         }
     } else {
         // Multi-segment: first may be signed
@@ -487,10 +480,7 @@ fn emit_extract_field(w: &mut dyn Write, field: &Field) -> std::io::Result<()> {
         };
         if segs.len() == 1 {
             // val is i32/u32, cast first
-            writeln!(
-                w,
-                "    (val as i64) << {shift}"
-            )?;
+            writeln!(w, "    (val as i64) << {shift}")?;
         } else {
             // val is already i64
             writeln!(w, "    val << {shift}")?;
@@ -538,7 +528,7 @@ fn emit_decode_trait(
     patterns: &[Pattern],
     argsets: &BTreeMap<String, ArgSet>,
 ) -> std::io::Result<()> {
-    writeln!(w, "pub trait Decode {{")?;
+    writeln!(w, "pub trait Decode<Ir> {{")?;
     for p in patterns {
         let sname = if p.args_name.is_empty() {
             "ArgsEmpty".to_string()
@@ -547,8 +537,9 @@ fn emit_decode_trait(
         };
         writeln!(
             w,
-            "    fn trans_{}(&mut self, a: &{sname}) \
-             -> bool;",
+            "    fn trans_{}(\
+             &mut self, ir: &mut Ir, a: &{sname}\
+             ) -> bool;",
             p.name
         )?;
     }
@@ -568,8 +559,8 @@ fn emit_decode_fn(
 ) -> std::io::Result<()> {
     writeln!(
         w,
-        "pub fn decode<T: Decode>(\
-         ctx: &mut T, insn: u32\
+        "pub fn decode<Ir, T: Decode<Ir>>(\
+         ctx: &mut T, ir: &mut Ir, insn: u32\
          ) -> bool {{"
     )?;
     for p in patterns {
@@ -579,11 +570,7 @@ fn emit_decode_fn(
             format!("Args{}", to_camel(&p.args_name))
         };
         if p.fixedmask == 0xffff_ffff {
-            writeln!(
-                w,
-                "    if insn == {:#010x} {{",
-                p.fixedbits
-            )?;
+            writeln!(w, "    if insn == {:#010x} {{", p.fixedbits)?;
         } else {
             writeln!(
                 w,
@@ -603,7 +590,7 @@ fn emit_decode_fn(
             writeln!(
                 w,
                 "        return ctx.trans_{}(\
-                 &{sname} {{}});",
+                 ir, &{sname} {{}});",
                 p.name
             )?;
         } else {
@@ -618,7 +605,7 @@ fn emit_decode_fn(
                 }
             }
             writeln!(w, "        }};")?;
-            writeln!(w, "        return ctx.trans_{}(&a);", p.name)?;
+            writeln!(w, "        return ctx.trans_{}(ir, &a);", p.name)?;
         }
         writeln!(w, "    }}")?;
     }
@@ -652,8 +639,7 @@ mod tests {
 
     #[test]
     fn bit_pattern_all_fixed() {
-        let toks =
-            ["0000000", "00000", "00000", "000", "00000", "1110011"];
+        let toks = ["0000000", "00000", "00000", "000", "00000", "1110011"];
         let r = parse_bit_tokens(&toks).unwrap();
         assert_eq!(r.fixedbits, 0x0000_0073);
         assert_eq!(r.fixedmask, 0xffff_ffff);
@@ -662,8 +648,7 @@ mod tests {
 
     #[test]
     fn bit_pattern_with_dontcare() {
-        let toks =
-            ["....................", ".....", "0110111"];
+        let toks = ["....................", ".....", "0110111"];
         let r = parse_bit_tokens(&toks).unwrap();
         assert_eq!(r.fixedbits, 0x0000_0037);
         assert_eq!(r.fixedmask, 0x0000_007f);
@@ -672,8 +657,7 @@ mod tests {
     #[test]
     fn bit_pattern_inline_fields() {
         let toks = [
-            "----", "pred:4", "succ:4", "-----", "000",
-            "-----", "0001111",
+            "----", "pred:4", "succ:4", "-----", "000", "-----", "0001111",
         ];
         let r = parse_bit_tokens(&toks).unwrap();
         assert_eq!(r.fixedmask, 0x0000_707f);
@@ -684,8 +668,7 @@ mod tests {
 
     #[test]
     fn bit_pattern_exceeds_32() {
-        let toks =
-            ["11111111111111111111111111111111", "1"];
+        let toks = ["11111111111111111111111111111111", "1"];
         assert!(parse_bit_tokens(&toks).is_err());
     }
 
@@ -727,10 +710,8 @@ mod tests {
 
     #[test]
     fn parse_field_with_function() {
-        let f = parse_field(
-            "%imm_b 31:s1 7:1 25:6 8:4 !function=ex_shift_1",
-        )
-        .unwrap();
+        let f = parse_field("%imm_b 31:s1 7:1 25:6 8:4 !function=ex_shift_1")
+            .unwrap();
         assert_eq!(f.name, "imm_b");
         assert_eq!(f.segments.len(), 4);
         assert_eq!(f.func.as_deref(), Some("ex_shift_1"));
@@ -820,7 +801,7 @@ addi ............ ..... 000 ..... 0010011 @i
         assert!(code.contains("pub trait Decode"));
         assert!(code.contains("fn trans_add("));
         assert!(code.contains("fn trans_addi("));
-        assert!(code.contains("pub fn decode<T: Decode>"));
+        assert!(code.contains("pub fn decode<Ir, T: Decode<Ir>>"));
         assert!(code.contains("extract_rs1(insn)"));
         assert!(code.contains("extract_imm_i(insn)"));
     }
@@ -834,10 +815,7 @@ addi ............ ..... 000 ..... 0010011 @i
         generate(&input, &mut out).unwrap();
         let code = String::from_utf8(out).unwrap();
         // All 65 trans_ methods in trait
-        assert_eq!(
-            code.matches("fn trans_").count(),
-            65
-        );
+        assert_eq!(code.matches("fn trans_").count(), 65);
         assert!(code.contains("fn trans_lui("));
         assert!(code.contains("fn trans_jal("));
         assert!(code.contains("fn trans_mul("));
@@ -853,9 +831,8 @@ addi ............ ..... 000 ..... 0010011 @i
             std::fs::read_to_string("../frontend/decode/riscv32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
-        let find = |name: &str| {
-            p.patterns.iter().find(|p| p.name == name).unwrap()
-        };
+        let find =
+            |name: &str| p.patterns.iter().find(|p| p.name == name).unwrap();
         // add: funct7=0000000, funct3=000, opcode=0110011
         let add = find("add");
         assert_eq!(add.fixedmask, 0xfe00_707f);
@@ -875,9 +852,8 @@ addi ............ ..... 000 ..... 0010011 @i
             std::fs::read_to_string("../frontend/decode/riscv32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
-        let find = |name: &str| {
-            p.patterns.iter().find(|p| p.name == name).unwrap()
-        };
+        let find =
+            |name: &str| p.patterns.iter().find(|p| p.name == name).unwrap();
         // addi: funct3=000, opcode=0010011
         let addi = find("addi");
         assert_eq!(addi.fixedmask, 0x0000_707f);
@@ -894,9 +870,8 @@ addi ............ ..... 000 ..... 0010011 @i
             std::fs::read_to_string("../frontend/decode/riscv32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
-        let find = |name: &str| {
-            p.patterns.iter().find(|p| p.name == name).unwrap()
-        };
+        let find =
+            |name: &str| p.patterns.iter().find(|p| p.name == name).unwrap();
         // beq: funct3=000, opcode=1100011
         let beq = find("beq");
         assert_eq!(beq.fixedmask, 0x0000_707f);
@@ -912,9 +887,8 @@ addi ............ ..... 000 ..... 0010011 @i
             std::fs::read_to_string("../frontend/decode/riscv32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
-        let find = |name: &str| {
-            p.patterns.iter().find(|p| p.name == name).unwrap()
-        };
+        let find =
+            |name: &str| p.patterns.iter().find(|p| p.name == name).unwrap();
         // slli (RV64): top 6 bits = 00000., funct3=001
         let slli = find("slli");
         assert_eq!(slli.fixedmask, 0xf800_707f);
@@ -958,10 +932,8 @@ addi ............ ..... 000 ..... 0010011 @i
         // sw x2, 8(x1) → 0x00208423 (imm=8)
         let insn: u32 = 0x0020_8423;
         // imm_s: 25:s7 7:5
-        let mut val =
-            (((insn as i32) << 0) >> 25) as i64;
-        val = (val << 5)
-            | (((insn >> 7) & 0x1f) as i64);
+        let mut val = (((insn as i32) << 0) >> 25) as i64;
+        val = (val << 5) | (((insn >> 7) & 0x1f) as i64);
         assert_eq!(val, 8);
     }
 
@@ -970,14 +942,10 @@ addi ............ ..... 000 ..... 0010011 @i
         // beq x0, x0, +8 → 0x00000463
         // B-imm: {31:s1, 7:1, 25:6, 8:4} << 1
         let insn: u32 = 0x0000_0463;
-        let mut val =
-            (((insn as i32) << 0) >> 31) as i64;
-        val = (val << 1)
-            | (((insn >> 7) & 0x1) as i64);
-        val = (val << 6)
-            | (((insn >> 25) & 0x3f) as i64);
-        val = (val << 4)
-            | (((insn >> 8) & 0xf) as i64);
+        let mut val = (((insn as i32) << 0) >> 31) as i64;
+        val = (val << 1) | (((insn >> 7) & 0x1) as i64);
+        val = (val << 6) | (((insn >> 25) & 0x3f) as i64);
+        val = (val << 4) | (((insn >> 8) & 0xf) as i64);
         val <<= 1;
         assert_eq!(val, 8);
     }
@@ -987,14 +955,10 @@ addi ............ ..... 000 ..... 0010011 @i
         // jal x1, +20 → 0x014000ef
         // J-imm: {31:s1, 12:8, 20:1, 21:10} << 1
         let insn: u32 = 0x0140_00ef;
-        let mut val =
-            (((insn as i32) << 0) >> 31) as i64;
-        val = (val << 8)
-            | (((insn >> 12) & 0xff) as i64);
-        val = (val << 1)
-            | (((insn >> 20) & 0x1) as i64);
-        val = (val << 10)
-            | (((insn >> 21) & 0x3ff) as i64);
+        let mut val = (((insn as i32) << 0) >> 31) as i64;
+        val = (val << 8) | (((insn >> 12) & 0xff) as i64);
+        val = (val << 1) | (((insn >> 20) & 0x1) as i64);
+        val = (val << 10) | (((insn >> 21) & 0x3ff) as i64);
         val <<= 1;
         assert_eq!(val, 20);
     }
@@ -1013,14 +977,10 @@ addi ............ ..... 000 ..... 0010011 @i
     fn extract_imm_b_negative() {
         // beq x0, x0, -4 → 0xfe000ee3
         let insn: u32 = 0xfe00_0ee3;
-        let mut val =
-            (((insn as i32) << 0) >> 31) as i64;
-        val = (val << 1)
-            | (((insn >> 7) & 0x1) as i64);
-        val = (val << 6)
-            | (((insn >> 25) & 0x3f) as i64);
-        val = (val << 4)
-            | (((insn >> 8) & 0xf) as i64);
+        let mut val = (((insn as i32) << 0) >> 31) as i64;
+        val = (val << 1) | (((insn >> 7) & 0x1) as i64);
+        val = (val << 6) | (((insn >> 25) & 0x3f) as i64);
+        val = (val << 4) | (((insn >> 8) & 0xf) as i64);
         val <<= 1;
         assert_eq!(val, -4);
     }
@@ -1149,11 +1109,7 @@ lui  .................... ..... 0110111 @u
             std::fs::read_to_string("../frontend/decode/riscv32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
-        let fence = p
-            .patterns
-            .iter()
-            .find(|p| p.name == "fence")
-            .unwrap();
+        let fence = p.patterns.iter().find(|p| p.name == "fence").unwrap();
         assert_eq!(fence.args_name, "_auto_fence");
         assert!(fence.field_map.contains_key("pred"));
         assert!(fence.field_map.contains_key("succ"));
@@ -1173,8 +1129,7 @@ lui  .................... ..... 0110111 @u
         let mut val = ((insn as i32) >> 31) as i64;
         val = (val << 8) | (((insn >> 12) & 0xff) as i64);
         val = (val << 1) | (((insn >> 20) & 0x1) as i64);
-        val = (val << 10)
-            | (((insn >> 21) & 0x3ff) as i64);
+        val = (val << 10) | (((insn >> 21) & 0x3ff) as i64);
         val <<= 1;
         assert_eq!(val, -2);
     }
@@ -1266,9 +1221,7 @@ lui  .................... ..... 0110111 @u
     fn matches_pattern(p: &Parsed, insn: u32) -> Vec<String> {
         p.patterns
             .iter()
-            .filter(|pat| {
-                insn & pat.fixedmask == pat.fixedbits
-            })
+            .filter(|pat| insn & pat.fixedmask == pat.fixedbits)
             .map(|pat| pat.name.clone())
             .collect()
     }
