@@ -35,7 +35,7 @@ Signed-off-by: Name <email>
 **Subject 行规则**：
 
 - 格式为 `module: subject`，其中 `module` 是受影响的主要模块名
-- 常用 module 名：`tcg-core`、`tcg-backend`、`tcg-frontend`、`decodetree`、`tcg-tests`、`docs`、`project`（跨模块变更）
+- 常用 module 名：`core`、`backend`、`frontend`、`decodetree`、`exec`、`linux-user`、`tests`、`docs`、`project`（跨模块变更）
 - subject 使用小写开头，祈使语气（如 `add`、`fix`、`remove`），不加句号
 - 总长度不超过 72 字符
 
@@ -48,7 +48,7 @@ Signed-off-by: Name <email>
 **示例**：
 
 ```
-tcg-core: add vector opcode support
+core: add vector opcode support
 
 Add V64/V128/V256 vector opcodes to the unified opcode enum.
 Each vector op carries OpFlags::VECTOR for backend dispatch.
