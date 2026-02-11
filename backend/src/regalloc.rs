@@ -523,6 +523,36 @@ pub fn regalloc_and_codegen(
                 backend.tcg_out_op(buf, ctx, &op, &[], &[], &cargs);
             }
 
+            Opcode::GotoPtr => {
+                // Load input register, sync globals,
+                // then emit indirect jump.
+                let ct = backend.op_constraint(op.opc);
+                let tidx = op.args[0];
+                let arg_ct = &ct.args[0];
+                let reg = temp_load_to(
+                    ctx,
+                    &mut state,
+                    backend,
+                    buf,
+                    tidx,
+                    arg_ct.regs,
+                    RegSet::EMPTY,
+                    RegSet::EMPTY,
+                );
+                let life = op.life;
+                if life.is_dead(0) {
+                    temp_dead(ctx, &mut state, tidx);
+                }
+                sync_globals(ctx, backend, buf);
+                backend.tcg_out_op(buf, ctx, &op, &[], &[reg], &[]);
+            }
+
+            Opcode::Mb => {
+                // NP (NOT_PRESENT): no register allocation,
+                // emit directly.
+                crate::x86_64::emitter::emit_mfence(buf);
+            }
+
             Opcode::BrCond => {
                 let ct = backend.op_constraint(op.opc);
                 let nb_iargs = def.nb_iargs as usize;

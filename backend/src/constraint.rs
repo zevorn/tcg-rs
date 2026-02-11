@@ -182,3 +182,101 @@ pub const fn n1_i2(o0: RegSet, i0: RegSet, i1: RegSet) -> OpConstraint {
     args[2] = r(i1);
     OpConstraint { args }
 }
+
+/// 0 outputs, 1 input.
+pub const fn o0_i1(i0: RegSet) -> OpConstraint {
+    let mut args = [ArgConstraint::UNUSED; MAX_OP_ARGS];
+    args[0] = r(i0);
+    OpConstraint { args }
+}
+
+/// 2 fixed outputs, 2 inputs (o0 alias i0, i1 free).
+/// For MulS2/MulU2: o0=RAX, o1=RDX, i0=RAX, i1=R.
+pub const fn o2_i2_fixed(o0_reg: u8, o1_reg: u8, i1: RegSet) -> OpConstraint {
+    let mut args = [ArgConstraint::UNUSED; MAX_OP_ARGS];
+    args[0] = ArgConstraint {
+        regs: RegSet::from_raw(1u64 << o0_reg),
+        oalias: true,
+        ialias: false,
+        alias_index: 0,
+        newreg: false,
+    };
+    args[1] = fixed(o1_reg);
+    args[2] = ArgConstraint {
+        regs: RegSet::from_raw(1u64 << o0_reg),
+        oalias: false,
+        ialias: true,
+        alias_index: 0,
+        newreg: false,
+    };
+    args[3] = r(i1);
+    OpConstraint { args }
+}
+
+/// 2 fixed outputs, 3 inputs (o0 alias i0, o1 alias i1,
+/// i2 free).
+/// For DivS2/DivU2: o0=RAX, o1=RDX, i0=RAX, i1=RDX,
+/// i2=R.
+pub const fn o2_i3_fixed(o0_reg: u8, o1_reg: u8, i2: RegSet) -> OpConstraint {
+    let mut args = [ArgConstraint::UNUSED; MAX_OP_ARGS];
+    args[0] = ArgConstraint {
+        regs: RegSet::from_raw(1u64 << o0_reg),
+        oalias: true,
+        ialias: false,
+        alias_index: 0,
+        newreg: false,
+    };
+    args[1] = ArgConstraint {
+        regs: RegSet::from_raw(1u64 << o1_reg),
+        oalias: true,
+        ialias: false,
+        alias_index: 1,
+        newreg: false,
+    };
+    args[2] = ArgConstraint {
+        regs: RegSet::from_raw(1u64 << o0_reg),
+        oalias: false,
+        ialias: true,
+        alias_index: 0,
+        newreg: false,
+    };
+    args[3] = ArgConstraint {
+        regs: RegSet::from_raw(1u64 << o1_reg),
+        oalias: false,
+        ialias: true,
+        alias_index: 1,
+        newreg: false,
+    };
+    args[4] = r(i2);
+    OpConstraint { args }
+}
+
+/// 1 output, 4 inputs, output aliases input 2.
+/// For MovCond: CMP i0,i1 -> CMOV d=i2,i3.
+pub const fn o1_i4_alias2(
+    o0: RegSet,
+    i0: RegSet,
+    i1: RegSet,
+    _i2: RegSet,
+    i3: RegSet,
+) -> OpConstraint {
+    let mut args = [ArgConstraint::UNUSED; MAX_OP_ARGS];
+    args[0] = ArgConstraint {
+        regs: o0,
+        oalias: true,
+        ialias: false,
+        alias_index: 2,
+        newreg: false,
+    };
+    args[1] = r(i0);
+    args[2] = r(i1);
+    args[3] = ArgConstraint {
+        regs: o0,
+        oalias: false,
+        ialias: true,
+        alias_index: 0,
+        newreg: false,
+    };
+    args[4] = r(i3);
+    OpConstraint { args }
+}

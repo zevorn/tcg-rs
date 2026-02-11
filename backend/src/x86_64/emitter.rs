@@ -1071,6 +1071,17 @@ pub fn emit_shrd_ri(
     buf.emit_u8(imm);
 }
 
+/// Emit ROL word, 8 (DATA16 + ROL r16, 8) for bswap16.
+pub fn emit_rolw_8(buf: &mut CodeBuffer, reg: Reg) {
+    emit_modrm_ext(buf, OPC_SHIFT_Ib | P_DATA16, ShiftOp::Rol as u8, reg);
+    buf.emit_u8(8);
+}
+
+/// Emit STC (set carry flag).
+pub fn emit_stc(buf: &mut CodeBuffer) {
+    buf.emit_u8(0xF9);
+}
+
 // -- VEX encoding (for BMI instructions) --
 
 /// Emit 2-byte or 3-byte VEX prefix + opcode + ModR/M (reg-reg).

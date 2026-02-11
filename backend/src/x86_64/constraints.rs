@@ -26,8 +26,12 @@ pub fn op_constraint(opc: Opcode) -> &'static OpConstraint {
             static C: OpConstraint = o1_i1_alias(R, R);
             &C
         }
-        // -- Shifts: output aliases input 0, count in RCX --
-        Opcode::Shl | Opcode::Shr | Opcode::Sar => {
+        // -- Shifts/rotates: output aliases input 0, count in RCX --
+        Opcode::Shl
+        | Opcode::Shr
+        | Opcode::Sar
+        | Opcode::RotL
+        | Opcode::RotR => {
             static C: OpConstraint = o1_i2_alias_fixed(R, R, Reg::Rcx as u8);
             &C
         }
@@ -36,9 +40,88 @@ pub fn op_constraint(opc: Opcode) -> &'static OpConstraint {
             static C: OpConstraint = n1_i2(R, R, R);
             &C
         }
+        // -- NegSetCond: newreg output --
+        Opcode::NegSetCond => {
+            static C: OpConstraint = n1_i2(R, R, R);
+            &C
+        }
+        // -- MovCond: output aliases input 2 (v1) --
+        Opcode::MovCond => {
+            static C: OpConstraint = o1_i4_alias2(R, R, R, R, R);
+            &C
+        }
         // -- BrCond: no outputs --
         Opcode::BrCond => {
             static C: OpConstraint = o0_i2(R, R);
+            &C
+        }
+        // -- Double-width multiply: RAX:RDX result --
+        Opcode::MulS2 | Opcode::MulU2 => {
+            static C: OpConstraint =
+                o2_i2_fixed(Reg::Rax as u8, Reg::Rdx as u8, R);
+            &C
+        }
+        // -- Double-width divide: RDX:RAX input/output --
+        Opcode::DivS2 | Opcode::DivU2 => {
+            static C: OpConstraint =
+                o2_i3_fixed(Reg::Rax as u8, Reg::Rdx as u8, R);
+            &C
+        }
+        // -- Carry/borrow arithmetic: destructive binary --
+        Opcode::AddCO
+        | Opcode::AddCI
+        | Opcode::AddCIO
+        | Opcode::AddC1O
+        | Opcode::SubBO
+        | Opcode::SubBI
+        | Opcode::SubBIO
+        | Opcode::SubB1O => {
+            static C: OpConstraint = o1_i2_alias(R, R, R);
+            &C
+        }
+        // -- AndC: three-address via ANDN (BMI1) --
+        Opcode::AndC => {
+            static C: OpConstraint = o1_i2(R, R, R);
+            &C
+        }
+        // -- Bit-field extract (unsigned/signed) --
+        Opcode::Extract | Opcode::SExtract => {
+            static C: OpConstraint = o1_i1(R, R);
+            &C
+        }
+        // -- Deposit: output aliases input 0 --
+        Opcode::Deposit => {
+            static C: OpConstraint = o1_i2_alias(R, R, R);
+            &C
+        }
+        // -- Extract2 (SHRD): output aliases input 0 --
+        Opcode::Extract2 => {
+            static C: OpConstraint = o1_i2_alias(R, R, R);
+            &C
+        }
+        // -- Byte swap: destructive unary --
+        Opcode::Bswap16 | Opcode::Bswap32 | Opcode::Bswap64 => {
+            static C: OpConstraint = o1_i1_alias(R, R);
+            &C
+        }
+        // -- Bit counting: Clz/Ctz have fallback input --
+        Opcode::Clz | Opcode::Ctz => {
+            static C: OpConstraint = n1_i2(R, R, R);
+            &C
+        }
+        // -- CtPop: unary --
+        Opcode::CtPop => {
+            static C: OpConstraint = o1_i1(R, R);
+            &C
+        }
+        // -- ExtrhI64I32: destructive unary --
+        Opcode::ExtrhI64I32 => {
+            static C: OpConstraint = o1_i1_alias(R, R);
+            &C
+        }
+        // -- GotoPtr: single input, no output --
+        Opcode::GotoPtr => {
+            static C: OpConstraint = o0_i1(R);
             &C
         }
         // -- Load: output, base input --

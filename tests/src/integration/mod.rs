@@ -868,13 +868,7 @@ fn test_exec_alu_shift_cond_mov() {
         ctx.gen_sar(Type::I64, t_sar, regs[3], c_shift);
         ctx.gen_mov(Type::I64, regs[21], t_sar);
 
-        ctx.gen_setcond(
-            Type::I64,
-            t_sc,
-            regs[4],
-            regs[5],
-            tcg_core::Cond::Lt,
-        );
+        ctx.gen_setcond(Type::I64, t_sc, regs[4], regs[5], tcg_core::Cond::Lt);
         ctx.gen_mov(Type::I64, regs[22], t_sc);
 
         ctx.gen_exit_tb(0);
@@ -884,11 +878,7 @@ fn test_exec_alu_shift_cond_mov() {
     let expected_shl = a.wrapping_shl(sh);
     let expected_shr = a >> sh;
     let expected_sar = ((sar_val as i64) >> sh) as u64;
-    let expected_sc = if (sc_a as i64) < (sc_b as i64) {
-        1
-    } else {
-        0
-    };
+    let expected_sc = if (sc_a as i64) < (sc_b as i64) { 1 } else { 0 };
 
     assert_eq!(exit_val, 0);
     assert_eq!(cpu.regs[10], a);
@@ -1027,7 +1017,13 @@ fn test_exec_control_flow_ops() {
         ctx.gen_set_label(label_br);
         ctx.gen_mov(Type::I64, regs[10], c1);
 
-        ctx.gen_brcond(Type::I64, regs[1], regs[2], tcg_core::Cond::Lt, label_taken);
+        ctx.gen_brcond(
+            Type::I64,
+            regs[1],
+            regs[2],
+            tcg_core::Cond::Lt,
+            label_taken,
+        );
         ctx.gen_mov(Type::I64, regs[11], c2);
         ctx.gen_br(label_end);
         ctx.gen_set_label(label_taken);

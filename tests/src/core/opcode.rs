@@ -224,22 +224,8 @@ fn opcode_def_full_coverage() {
         0,
         int,
     );
-    assert_group(
-        &mut seen,
-        &[Opcode::DivS2, Opcode::DivU2],
-        2,
-        3,
-        0,
-        int,
-    );
-    assert_group(
-        &mut seen,
-        &[Opcode::MulS2, Opcode::MulU2],
-        2,
-        2,
-        0,
-        int,
-    );
+    assert_group(&mut seen, &[Opcode::DivS2, Opcode::DivU2], 2, 3, 0, int);
+    assert_group(&mut seen, &[Opcode::MulS2, Opcode::MulU2], 2, 2, 0, int);
     assert_group(
         &mut seen,
         &[Opcode::AddCO, Opcode::AddC1O, Opcode::SubBO, Opcode::SubB1O],
@@ -345,7 +331,12 @@ fn opcode_def_full_coverage() {
     assert_group(&mut seen, &[Opcode::MovVec], 1, 1, 0, vc_np);
     assert_group(
         &mut seen,
-        &[Opcode::DupVec, Opcode::NegVec, Opcode::AbsVec, Opcode::NotVec],
+        &[
+            Opcode::DupVec,
+            Opcode::NegVec,
+            Opcode::AbsVec,
+            Opcode::NotVec,
+        ],
         1,
         1,
         0,

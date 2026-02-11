@@ -313,6 +313,255 @@ impl HostCodeGen for X86_64CodeGen {
             Opcode::GotoTb => {
                 self.emit_goto_tb(buf);
             }
+            // -- Rotates: same pattern as shifts --
+            Opcode::RotL | Opcode::RotR => {
+                let d = Reg::from_u8(oregs[0]);
+                let sop = match op.opc {
+                    Opcode::RotL => ShiftOp::Rol,
+                    Opcode::RotR => ShiftOp::Ror,
+                    _ => unreachable!(),
+                };
+                emit_shift_cl(buf, sop, rexw, d);
+            }
+            // -- Double-width multiply --
+            Opcode::MulS2 => {
+                let src = Reg::from_u8(iregs[1]);
+                emit_imul1(buf, rexw, src);
+            }
+            Opcode::MulU2 => {
+                let src = Reg::from_u8(iregs[1]);
+                emit_mul(buf, rexw, src);
+            }
+            // -- Double-width divide --
+            Opcode::DivS2 => {
+                let divisor = Reg::from_u8(iregs[2]);
+                emit_idiv(buf, rexw, divisor);
+            }
+            Opcode::DivU2 => {
+                let divisor = Reg::from_u8(iregs[2]);
+                emit_div(buf, rexw, divisor);
+            }
+            // -- Carry/borrow arithmetic --
+            Opcode::AddCO => {
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_arith_rr(buf, ArithOp::Add, rexw, d, b);
+            }
+            Opcode::AddCI | Opcode::AddCIO => {
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_arith_rr(buf, ArithOp::Adc, rexw, d, b);
+            }
+            Opcode::AddC1O => {
+                // ADD with carry-in=1: STC then ADC
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_stc(buf);
+                emit_arith_rr(buf, ArithOp::Adc, rexw, d, b);
+            }
+            Opcode::SubBO => {
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_arith_rr(buf, ArithOp::Sub, rexw, d, b);
+            }
+            Opcode::SubBI | Opcode::SubBIO => {
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_arith_rr(buf, ArithOp::Sbb, rexw, d, b);
+            }
+            Opcode::SubB1O => {
+                // SUB with borrow-in=1: STC then SBB
+                let d = Reg::from_u8(oregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                emit_stc(buf);
+                emit_arith_rr(buf, ArithOp::Sbb, rexw, d, b);
+            }
+            // -- AndC: ANDN dst, src2, src1 = src1 & ~src2 --
+            Opcode::AndC => {
+                let d = Reg::from_u8(oregs[0]);
+                let a = Reg::from_u8(iregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                // ANDN dst, b, a => a & ~b
+                emit_andn(buf, rexw, d, b, a);
+            }
+            // -- Bit-field extract (unsigned) --
+            Opcode::Extract => {
+                let d = Reg::from_u8(oregs[0]);
+                let s = Reg::from_u8(iregs[0]);
+                let ofs = cargs[0];
+                let len = cargs[1];
+                assert!(ofs == 0, "Extract: only ofs=0 supported");
+                match len {
+                    8 => emit_movzx(buf, OPC_MOVZBL, d, s),
+                    16 => emit_movzx(buf, OPC_MOVZWL, d, s),
+                    32 => {
+                        if d != s {
+                            emit_mov_rr(buf, false, d, s);
+                        }
+                    }
+                    _ => panic!("Extract: unsupported len={len}"),
+                }
+            }
+            // -- Bit-field extract (signed) --
+            Opcode::SExtract => {
+                let d = Reg::from_u8(oregs[0]);
+                let s = Reg::from_u8(iregs[0]);
+                let ofs = cargs[0];
+                let len = cargs[1];
+                assert!(ofs == 0, "SExtract: only ofs=0 supported");
+                match len {
+                    8 => {
+                        let opc = if rexw {
+                            OPC_MOVSBL | P_REXW
+                        } else {
+                            OPC_MOVSBL
+                        };
+                        emit_movsx(buf, opc, d, s);
+                    }
+                    16 => {
+                        let opc = if rexw {
+                            OPC_MOVSWL | P_REXW
+                        } else {
+                            OPC_MOVSWL
+                        };
+                        emit_movsx(buf, opc, d, s);
+                    }
+                    32 => {
+                        emit_movsx(buf, OPC_MOVSLQ, d, s);
+                    }
+                    _ => panic!("SExtract: unsupported len={len}"),
+                }
+            }
+            // -- Deposit: bit-field store (ofs=0, len=8/16) --
+            Opcode::Deposit => {
+                let d = Reg::from_u8(oregs[0]);
+                let src = Reg::from_u8(iregs[1]);
+                let ofs = cargs[0];
+                let len = cargs[1];
+                assert!(ofs == 0, "Deposit: only ofs=0 supported");
+                match len {
+                    8 => {
+                        // MOV byte: overwrite low 8 bits
+                        emit_modrm(
+                            buf,
+                            OPC_MOVB_EvGv | P_REXB_R | P_REXB_RM,
+                            src,
+                            d,
+                        );
+                    }
+                    16 => {
+                        // MOV word: overwrite low 16 bits
+                        emit_modrm(buf, P_DATA16 | OPC_MOVL_EvGv, src, d);
+                    }
+                    _ => panic!("Deposit: unsupported len={len}"),
+                }
+            }
+            // -- Extract2: SHRD dst, src, imm --
+            Opcode::Extract2 => {
+                let d = Reg::from_u8(oregs[0]);
+                let src = Reg::from_u8(iregs[1]);
+                let shift = cargs[0] as u8;
+                emit_shrd_ri(buf, rexw, d, src, shift);
+            }
+            // -- Byte swap --
+            Opcode::Bswap16 => {
+                let d = Reg::from_u8(oregs[0]);
+                let flags = cargs[0];
+                // TCG_BSWAP_OS = 4, TCG_BSWAP_OZ = 2,
+                // TCG_BSWAP_IZ = 1
+                if flags & 4 != 0 {
+                    // Output sign-extended
+                    if rexw {
+                        emit_bswap(buf, true, d);
+                        emit_shift_ri(buf, ShiftOp::Sar, true, d, 48);
+                    } else {
+                        emit_bswap(buf, false, d);
+                        emit_shift_ri(buf, ShiftOp::Sar, false, d, 16);
+                    }
+                } else if flags & 3 == 2 {
+                    // OZ set, IZ not set
+                    emit_bswap(buf, false, d);
+                    emit_shift_ri(buf, ShiftOp::Shr, false, d, 16);
+                } else {
+                    emit_rolw_8(buf, d);
+                }
+            }
+            Opcode::Bswap32 => {
+                let d = Reg::from_u8(oregs[0]);
+                let flags = cargs[0];
+                emit_bswap(buf, false, d);
+                if flags & 4 != 0 {
+                    // TCG_BSWAP_OS: sign-extend to 64
+                    emit_movsx(buf, OPC_MOVSLQ, d, d);
+                }
+            }
+            Opcode::Bswap64 => {
+                let d = Reg::from_u8(oregs[0]);
+                emit_bswap(buf, true, d);
+            }
+            // -- Bit counting --
+            Opcode::Clz => {
+                let d = Reg::from_u8(oregs[0]);
+                let a = Reg::from_u8(iregs[0]);
+                // Assume LZCNT available (BMI1)
+                emit_lzcnt(buf, rexw, d, a);
+            }
+            Opcode::Ctz => {
+                let d = Reg::from_u8(oregs[0]);
+                let a = Reg::from_u8(iregs[0]);
+                // Assume TZCNT available (BMI1)
+                emit_tzcnt(buf, rexw, d, a);
+            }
+            Opcode::CtPop => {
+                let d = Reg::from_u8(oregs[0]);
+                let a = Reg::from_u8(iregs[0]);
+                emit_popcnt(buf, rexw, d, a);
+            }
+            // -- NegSetCond: CMP + SETCC + MOVZBL + NEG --
+            Opcode::NegSetCond => {
+                let d = Reg::from_u8(oregs[0]);
+                let a = Reg::from_u8(iregs[0]);
+                let b = Reg::from_u8(iregs[1]);
+                let cond = cond_from_u32(cargs[0]);
+                let x86c = X86Cond::from_tcg(cond);
+                if cond.is_tst() {
+                    emit_test_rr(buf, rexw, a, b);
+                } else {
+                    emit_arith_rr(buf, ArithOp::Cmp, rexw, a, b);
+                }
+                emit_setcc(buf, x86c, d);
+                emit_movzx(buf, OPC_MOVZBL | P_REXB_RM, d, d);
+                emit_neg(buf, rexw, d);
+            }
+            // -- MovCond: CMP + CMOV --
+            Opcode::MovCond => {
+                let d = Reg::from_u8(oregs[0]);
+                let c1 = Reg::from_u8(iregs[0]);
+                let c2 = Reg::from_u8(iregs[1]);
+                // d == v1 (alias), v2 = iregs[3]
+                let v2 = Reg::from_u8(iregs[3]);
+                let cond = cond_from_u32(cargs[0]);
+                let x86c = X86Cond::from_tcg(cond);
+                if cond.is_tst() {
+                    emit_test_rr(buf, rexw, c1, c2);
+                } else {
+                    emit_arith_rr(buf, ArithOp::Cmp, rexw, c1, c2);
+                }
+                // CMOV on inverted condition: if cond is
+                // false, move v2 into d (which already
+                // holds v1).
+                emit_cmovcc(buf, x86c.invert(), rexw, d, v2);
+            }
+            // -- ExtrhI64I32: SHR reg, 32 --
+            Opcode::ExtrhI64I32 => {
+                let d = Reg::from_u8(oregs[0]);
+                emit_shift_ri(buf, ShiftOp::Shr, true, d, 32);
+            }
+            // -- GotoPtr: indirect jump through register --
+            Opcode::GotoPtr => {
+                let reg = Reg::from_u8(iregs[0]);
+                X86_64CodeGen::emit_goto_ptr(buf, reg);
+            }
             _ => {
                 panic!("tcg_out_op: unhandled {:?}", op.opc,);
             }
