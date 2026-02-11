@@ -395,9 +395,7 @@ impl HostCodeGen for X86_64CodeGen {
                     8 => emit_movzx(buf, OPC_MOVZBL, d, s),
                     16 => emit_movzx(buf, OPC_MOVZWL, d, s),
                     32 => {
-                        if d != s {
-                            emit_mov_rr(buf, false, d, s);
-                        }
+                        emit_mov_rr(buf, false, d, s);
                     }
                     _ => panic!("Extract: unsupported len={len}"),
                 }

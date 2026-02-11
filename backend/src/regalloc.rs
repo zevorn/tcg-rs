@@ -227,6 +227,21 @@ fn temp_dead(ctx: &mut Context, state: &mut RegAllocState, tidx: TempIdx) {
     t.reg = None;
 }
 
+fn temp_dead_input(ctx: &mut Context, state: &mut RegAllocState, tidx: TempIdx) {
+    let temp = ctx.temp(tidx);
+    if temp.is_global_or_fixed() {
+        return;
+    }
+    if let Some(reg) = temp.reg {
+        if state.reg_to_temp[reg as usize] == Some(tidx) {
+            state.free_reg(reg);
+        }
+    }
+    let t = ctx.temp_mut(tidx);
+    t.val_type = TempVal::Dead;
+    t.reg = None;
+}
+
 /// Generic constraint-driven register allocation for one op.
 ///
 /// Mirrors QEMU's `tcg_reg_alloc_op()`.
@@ -306,15 +321,7 @@ fn regalloc_op(
         }
     }
 
-    // 2. Free dead inputs
-    for i in 0..nb_iargs {
-        if life.is_dead((nb_oargs + i) as u32) {
-            let tidx = op.args[nb_oargs + i];
-            temp_dead(ctx, state, tidx);
-        }
-    }
-
-    // 3. Process outputs
+    // 2. Process outputs
     let mut o_regs = [0u8; 10];
     let mut o_allocated = RegSet::EMPTY;
     for k in 0..nb_oargs {
@@ -379,12 +386,23 @@ fn regalloc_op(
         o_allocated = o_allocated.set(reg);
     }
 
-    // 4. Collect constant args
+    // Fixup: outputs may have evicted/moved inputs.
+    for i in 0..nb_iargs {
+        let tidx = op.args[nb_oargs + i];
+        let temp = ctx.temp(tidx);
+        if temp.val_type == TempVal::Reg {
+            if let Some(reg) = temp.reg {
+                i_regs[i] = reg;
+            }
+        }
+    }
+
+    // 3. Collect constant args
     let cstart = nb_oargs + nb_iargs;
     let cargs: Vec<u32> =
         (0..nb_cargs).map(|i| op.args[cstart + i].0).collect();
 
-    // 5. Emit host code
+    // 4. Emit host code
     backend.tcg_out_op(
         buf,
         ctx,
@@ -393,6 +411,23 @@ fn regalloc_op(
         &i_regs[..nb_iargs],
         &cargs,
     );
+
+    // 5. Free dead inputs
+    for i in 0..nb_iargs {
+        if life.is_dead((nb_oargs + i) as u32) {
+            let tidx = op.args[nb_oargs + i];
+            let mut aliased = false;
+            for k in 0..nb_oargs {
+                if op.args[k] == tidx {
+                    aliased = true;
+                    break;
+                }
+            }
+            if !aliased {
+                temp_dead_input(ctx, state, tidx);
+            }
+        }
+    }
 
     // 6. Free dead outputs
     for k in 0..nb_oargs {

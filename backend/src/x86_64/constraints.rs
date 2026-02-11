@@ -3,6 +3,13 @@ use crate::x86_64::regs::{Reg, ALLOCATABLE_REGS};
 use tcg_core::Opcode;
 
 const R: tcg_core::RegSet = ALLOCATABLE_REGS;
+const R_NO_RCX: tcg_core::RegSet = tcg_core::RegSet::from_raw(
+    ALLOCATABLE_REGS.raw() & !(1u64 << Reg::Rcx as u64),
+);
+const R_NO_RAX_RDX: tcg_core::RegSet = tcg_core::RegSet::from_raw(
+    ALLOCATABLE_REGS.raw()
+        & !((1u64 << Reg::Rax as u64) | (1u64 << Reg::Rdx as u64)),
+);
 
 /// Return the static register constraint for an opcode on
 /// x86-64.
@@ -32,7 +39,8 @@ pub fn op_constraint(opc: Opcode) -> &'static OpConstraint {
         | Opcode::Sar
         | Opcode::RotL
         | Opcode::RotR => {
-            static C: OpConstraint = o1_i2_alias_fixed(R, R, Reg::Rcx as u8);
+            static C: OpConstraint =
+                o1_i2_alias_fixed(R_NO_RCX, R_NO_RCX, Reg::Rcx as u8);
             &C
         }
         // -- SetCond: newreg output (setcc writes low byte) --
@@ -58,13 +66,13 @@ pub fn op_constraint(opc: Opcode) -> &'static OpConstraint {
         // -- Double-width multiply: RAX:RDX result --
         Opcode::MulS2 | Opcode::MulU2 => {
             static C: OpConstraint =
-                o2_i2_fixed(Reg::Rax as u8, Reg::Rdx as u8, R);
+                o2_i2_fixed(Reg::Rax as u8, Reg::Rdx as u8, R_NO_RAX_RDX);
             &C
         }
         // -- Double-width divide: RDX:RAX input/output --
         Opcode::DivS2 | Opcode::DivU2 => {
             static C: OpConstraint =
-                o2_i3_fixed(Reg::Rax as u8, Reg::Rdx as u8, R);
+                o2_i3_fixed(Reg::Rax as u8, Reg::Rdx as u8, R_NO_RAX_RDX);
             &C
         }
         // -- Carry/borrow arithmetic: destructive binary --
