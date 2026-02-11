@@ -227,7 +227,11 @@ fn temp_dead(ctx: &mut Context, state: &mut RegAllocState, tidx: TempIdx) {
     t.reg = None;
 }
 
-fn temp_dead_input(ctx: &mut Context, state: &mut RegAllocState, tidx: TempIdx) {
+fn temp_dead_input(
+    ctx: &mut Context,
+    state: &mut RegAllocState,
+    tidx: TempIdx,
+) {
     let temp = ctx.temp(tidx);
     if temp.is_global_or_fixed() {
         return;

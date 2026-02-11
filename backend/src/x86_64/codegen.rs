@@ -311,7 +311,8 @@ impl HostCodeGen for X86_64CodeGen {
                 self.emit_exit_tb(buf, val);
             }
             Opcode::GotoTb => {
-                self.emit_goto_tb(buf);
+                let (jmp, reset) = self.emit_goto_tb(buf);
+                self.goto_tb_info.borrow_mut().push((jmp, reset));
             }
             // -- Rotates: same pattern as shifts --
             Opcode::RotL | Opcode::RotR => {
@@ -564,6 +565,14 @@ impl HostCodeGen for X86_64CodeGen {
                 panic!("tcg_out_op: unhandled {:?}", op.opc,);
             }
         }
+    }
+
+    fn goto_tb_offsets(&self) -> Vec<(usize, usize)> {
+        self.goto_tb_info.borrow().clone()
+    }
+
+    fn clear_goto_tb_offsets(&self) {
+        self.goto_tb_info.borrow_mut().clear();
     }
 }
 

@@ -1,5 +1,7 @@
 #![allow(non_upper_case_globals)]
 
+use std::cell::RefCell;
+
 use crate::code_buffer::CodeBuffer;
 use crate::x86_64::regs::Reg;
 
@@ -1130,6 +1132,8 @@ pub struct X86_64CodeGen {
     pub epilogue_return_zero_offset: usize,
     pub tb_ret_offset: usize,
     pub code_gen_start: usize,
+    /// Recorded (jmp_offset, reset_offset) for each goto_tb.
+    pub(crate) goto_tb_info: RefCell<Vec<(usize, usize)>>,
 }
 
 impl X86_64CodeGen {
@@ -1139,6 +1143,7 @@ impl X86_64CodeGen {
             epilogue_return_zero_offset: 0,
             tb_ret_offset: 0,
             code_gen_start: 0,
+            goto_tb_info: RefCell::new(Vec::new()),
         }
     }
 
