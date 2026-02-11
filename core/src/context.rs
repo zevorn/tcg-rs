@@ -62,9 +62,26 @@ impl Context {
         }
     }
 
-    /// Reset context for translating a new TB. Preserves globals.
+    /// Reset context for translating a new TB. Preserves globals
+    /// but resets their register allocation state so the next
+    /// codegen pass starts with all globals in memory.
     pub fn reset(&mut self) {
         self.temps.truncate(self.nb_globals as usize);
+        // Reset regalloc state on surviving globals
+        for t in &mut self.temps {
+            match t.kind {
+                crate::temp::TempKind::Fixed => {
+                    // Fixed temps stay in their register
+                    t.mem_coherent = false;
+                }
+                crate::temp::TempKind::Global => {
+                    t.val_type = crate::types::TempVal::Mem;
+                    t.reg = None;
+                    t.mem_coherent = true;
+                }
+                _ => {}
+            }
+        }
         self.ops.clear();
         self.labels.clear();
         for table in &mut self.const_table {

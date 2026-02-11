@@ -36,6 +36,9 @@ pub struct TranslationBlock {
 
     /// Index of the next TB in the same hash bucket, or `None`.
     pub hash_next: Option<usize>,
+
+    /// Whether this TB has been invalidated.
+    pub invalid: bool,
 }
 
 /// Compile flags for TranslationBlock.cflags.
@@ -65,6 +68,7 @@ impl TranslationBlock {
             jmp_reset_offset: [None; 2],
             phys_pc: 0,
             hash_next: None,
+            invalid: false,
         }
     }
 
