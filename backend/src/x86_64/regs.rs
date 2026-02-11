@@ -52,6 +52,12 @@ impl Reg {
 /// persistent env pointer across all generated TB code.
 pub const TCG_AREG0: Reg = Reg::Rbp;
 
+/// TCG_GUEST_BASE_REG = R14: guest memory base pointer.
+///
+/// Holds the host address of guest address 0. Generated code
+/// accesses guest memory via [R14 + guest_addr].
+pub const TCG_GUEST_BASE_REG: Reg = Reg::R14;
+
 /// Callee-saved registers that the prologue must save/restore.
 /// Order matches QEMU's `tcg_target_callee_save_regs` (System V ABI).
 pub const CALLEE_SAVED: &[Reg] =
@@ -61,10 +67,12 @@ pub const CALLEE_SAVED: &[Reg] =
 pub const CALL_ARG_REGS: &[Reg] =
     &[Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9];
 
-/// Registers reserved by the backend — not available for register allocation.
-/// RSP (stack pointer) and RBP (env pointer / TCG_AREG0).
-pub const RESERVED_REGS: RegSet =
-    RegSet::from_raw((1 << Reg::Rsp as u64) | (1 << Reg::Rbp as u64));
+/// Registers reserved by the backend — not available for
+/// register allocation.
+/// RSP (stack), RBP (env), R14 (guest_base).
+pub const RESERVED_REGS: RegSet = RegSet::from_raw(
+    (1 << Reg::Rsp as u64) | (1 << Reg::Rbp as u64) | (1 << Reg::R14 as u64),
+);
 
 /// Stack frame constants (matching QEMU's layout).
 pub const STACK_ALIGN: usize = 16;
@@ -86,7 +94,10 @@ pub const FRAME_SIZE: usize = {
 pub const STACK_ADDEND: usize = FRAME_SIZE - PUSH_SIZE;
 
 /// All GPRs available for register allocation (excludes
-/// RSP and RBP which are reserved).
+/// RSP, RBP, and R14 which are reserved).
 pub const ALLOCATABLE_REGS: RegSet = RegSet::from_raw(
-    0xFFFF & !((1 << Reg::Rsp as u64) | (1 << Reg::Rbp as u64)),
+    0xFFFF
+        & !((1 << Reg::Rsp as u64)
+            | (1 << Reg::Rbp as u64)
+            | (1 << Reg::R14 as u64)),
 );

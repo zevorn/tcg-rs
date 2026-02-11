@@ -712,6 +712,49 @@ pub fn emit_store_sib(
     );
 }
 
+/// Emit MOV byte [base+index+0], reg (SIB byte store).
+pub fn emit_store_byte_sib(
+    buf: &mut CodeBuffer,
+    src: Reg,
+    base: Reg,
+    index: Reg,
+) {
+    emit_modrm_sib(buf, OPC_MOVB_EvGv | P_REXB_R, src, base, index, 0, 0);
+}
+
+/// Emit MOV word [base+index+0], reg (SIB 16-bit store).
+pub fn emit_store_word_sib(
+    buf: &mut CodeBuffer,
+    src: Reg,
+    base: Reg,
+    index: Reg,
+) {
+    emit_modrm_sib(buf, P_DATA16 | OPC_MOVL_EvGv, src, base, index, 0, 0);
+}
+
+/// Emit zero-extend SIB load: MOVZBL/MOVZWL [base+index].
+pub fn emit_load_zx_sib(
+    buf: &mut CodeBuffer,
+    opc: u32,
+    dst: Reg,
+    base: Reg,
+    index: Reg,
+) {
+    emit_modrm_sib(buf, opc, dst, base, index, 0, 0);
+}
+
+/// Emit sign-extend SIB load: MOVSBL/MOVSWL/MOVSLQ
+/// [base+index].
+pub fn emit_load_sx_sib(
+    buf: &mut CodeBuffer,
+    opc: u32,
+    dst: Reg,
+    base: Reg,
+    index: Reg,
+) {
+    emit_modrm_sib(buf, opc, dst, base, index, 0, 0);
+}
+
 /// Emit zero-extend load: MOVZBL/MOVZWL [base+offset].
 pub fn emit_load_zx(
     buf: &mut CodeBuffer,

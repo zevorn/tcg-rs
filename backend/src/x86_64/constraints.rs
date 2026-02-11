@@ -153,6 +153,16 @@ pub fn op_constraint(opc: Opcode) -> &'static OpConstraint {
             static C: OpConstraint = o1_i1(R, R);
             &C
         }
+        // -- Guest load: output, addr input --
+        Opcode::QemuLd => {
+            static C: OpConstraint = o1_i1(R, R);
+            &C
+        }
+        // -- Guest store: val input, addr input --
+        Opcode::QemuSt => {
+            static C: OpConstraint = o0_i2(R, R);
+            &C
+        }
         _ => &OpConstraint::EMPTY,
     }
 }

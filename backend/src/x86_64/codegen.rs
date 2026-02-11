@@ -19,6 +19,14 @@ impl HostCodeGen for X86_64CodeGen {
         }
         // mov TCG_AREG0 (rbp), rdi
         emit_mov_rr(buf, true, Reg::Rbp, CALL_ARG_REGS[0]);
+        // Load guest_base into R14: mov r14, [rbp+264]
+        emit_load(
+            buf,
+            true,
+            Reg::R14,
+            Reg::Rbp,
+            264, // GUEST_BASE_OFFSET
+        );
         // sub rsp, STACK_ADDEND
         emit_arith_ri(buf, ArithOp::Sub, true, Reg::Rsp, STACK_ADDEND as i32);
         // jmp *rsi (TB code pointer)
@@ -560,6 +568,73 @@ impl HostCodeGen for X86_64CodeGen {
             Opcode::GotoPtr => {
                 let reg = Reg::from_u8(iregs[0]);
                 X86_64CodeGen::emit_goto_ptr(buf, reg);
+            }
+            // -- Guest memory load (user-mode: [R14 + addr]) --
+            Opcode::QemuLd => {
+                let d = Reg::from_u8(oregs[0]);
+                let addr = Reg::from_u8(iregs[0]);
+                let memop = cargs[0] as u16;
+                let size = memop & 0x3;
+                let sign = memop & 4 != 0;
+                let gb = Reg::R14;
+                match (size, sign) {
+                    (0, false) => {
+                        emit_load_zx_sib(buf, OPC_MOVZBL, d, gb, addr);
+                    }
+                    (0, true) => {
+                        let opc = if rexw {
+                            OPC_MOVSBL | P_REXW
+                        } else {
+                            OPC_MOVSBL
+                        };
+                        emit_load_sx_sib(buf, opc, d, gb, addr);
+                    }
+                    (1, false) => {
+                        emit_load_zx_sib(buf, OPC_MOVZWL, d, gb, addr);
+                    }
+                    (1, true) => {
+                        let opc = if rexw {
+                            OPC_MOVSWL | P_REXW
+                        } else {
+                            OPC_MOVSWL
+                        };
+                        emit_load_sx_sib(buf, opc, d, gb, addr);
+                    }
+                    (2, false) => {
+                        // MOV r32 zero-extends to 64
+                        emit_load_sib(buf, false, d, gb, addr, 0, 0);
+                    }
+                    (2, true) => {
+                        emit_load_sx_sib(buf, OPC_MOVSLQ, d, gb, addr);
+                    }
+                    (3, _) => {
+                        emit_load_sib(buf, true, d, gb, addr, 0, 0);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            // -- Guest memory store (user-mode: [R14 + addr]) --
+            Opcode::QemuSt => {
+                let val = Reg::from_u8(iregs[0]);
+                let addr = Reg::from_u8(iregs[1]);
+                let memop = cargs[0] as u16;
+                let size = memop & 0x3;
+                let gb = Reg::R14;
+                match size {
+                    0 => {
+                        emit_store_byte_sib(buf, val, gb, addr);
+                    }
+                    1 => {
+                        emit_store_word_sib(buf, val, gb, addr);
+                    }
+                    2 => {
+                        emit_store_sib(buf, false, val, gb, addr, 0, 0);
+                    }
+                    3 => {
+                        emit_store_sib(buf, true, val, gb, addr, 0, 0);
+                    }
+                    _ => unreachable!(),
+                }
             }
             _ => {
                 panic!("tcg_out_op: unhandled {:?}", op.opc,);
