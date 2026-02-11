@@ -23,6 +23,8 @@ pub enum Opcode {
     DivU,
     RemS,
     RemU,
+    DivS2, // signed double-width division
+    DivU2, // unsigned double-width division
 
     // -- Widening multiply --
     MulSH, // signed multiply high
@@ -74,6 +76,10 @@ pub enum Opcode {
     Ctz,   // count trailing zeros
     CtPop, // population count
 
+    // -- 32-bit host: 64-bit ops on paired regs --
+    BrCond2I32,  // 64-bit conditional branch (32-bit host)
+    SetCond2I32, // 64-bit setcond (32-bit host)
+
     // -- Type conversion --
     ExtI32I64,   // sign-extend i32 -> i64
     ExtUI32I64,  // zero-extend i32 -> i64
@@ -111,10 +117,72 @@ pub enum Opcode {
     // -- Call --
     Call,
 
+    // -- Plugin --
+    PluginCb,
+    PluginMemCb,
+
     // -- Misc --
     Nop,
     Discard,
     InsnStart, // marks guest instruction boundary
+
+    // -- Vector data movement --
+    MovVec,
+    DupVec,  // duplicate scalar to all lanes
+    Dup2Vec, // duplicate two i32 to vector
+    LdVec,   // vector load
+    StVec,   // vector store
+    DupmVec, // duplicate from memory to vector
+
+    // -- Vector arithmetic --
+    AddVec,
+    SubVec,
+    MulVec,
+    NegVec,
+    AbsVec,
+    SsaddVec, // signed saturating add
+    UsaddVec, // unsigned saturating add
+    SssubVec, // signed saturating sub
+    UssubVec, // unsigned saturating sub
+    SminVec,
+    UminVec,
+    SmaxVec,
+    UmaxVec,
+
+    // -- Vector logic --
+    AndVec,
+    OrVec,
+    XorVec,
+    AndcVec,
+    OrcVec,
+    NandVec,
+    NorVec,
+    EqvVec,
+    NotVec,
+
+    // -- Vector shift by immediate --
+    ShliVec,
+    ShriVec,
+    SariVec,
+    RotliVec,
+
+    // -- Vector shift by scalar --
+    ShlsVec,
+    ShrsVec,
+    SarsVec,
+    RotlsVec,
+
+    // -- Vector shift by vector --
+    ShlvVec,
+    ShrvVec,
+    SarvVec,
+    RotlvVec,
+    RotrvVec,
+
+    // -- Vector compare/select --
+    CmpVec,
+    BitselVec, // bitwise select
+    CmpselVec, // compare and select
 
     // Sentinel — must be last
     Count,
@@ -194,6 +262,7 @@ const BX: OpFlags = OpFlags::BB_EXIT;
 const CB: OpFlags = OpFlags::COND_BRANCH;
 const CO: OpFlags = OpFlags::CARRY_OUT;
 const CI: OpFlags = OpFlags::CARRY_IN;
+const VC: OpFlags = OpFlags::VECTOR;
 const N: OpFlags = OpFlags::NONE;
 
 /// Static opcode definition table, indexed by `Opcode as usize`.
@@ -291,6 +360,22 @@ pub static OPCODE_DEFS: [OpDef; Opcode::Count as usize] = [
         name: "remu",
         nb_oargs: 1,
         nb_iargs: 2,
+        nb_cargs: 0,
+        flags: INT,
+    },
+    // DivS2
+    OpDef {
+        name: "divs2",
+        nb_oargs: 2,
+        nb_iargs: 3,
+        nb_cargs: 0,
+        flags: INT,
+    },
+    // DivU2
+    OpDef {
+        name: "divu2",
+        nb_oargs: 2,
+        nb_iargs: 3,
         nb_cargs: 0,
         flags: INT,
     },
@@ -582,6 +667,22 @@ pub static OPCODE_DEFS: [OpDef; Opcode::Count as usize] = [
         nb_cargs: 0,
         flags: INT,
     },
+    // BrCond2I32
+    OpDef {
+        name: "brcond2_i32",
+        nb_oargs: 0,
+        nb_iargs: 4,
+        nb_cargs: 2,
+        flags: OpFlags(BE.0 | CB.0),
+    },
+    // SetCond2I32
+    OpDef {
+        name: "setcond2_i32",
+        nb_oargs: 1,
+        nb_iargs: 4,
+        nb_cargs: 1,
+        flags: N,
+    },
     // ExtI32I64
     OpDef {
         name: "ext_i32_i64",
@@ -798,6 +899,22 @@ pub static OPCODE_DEFS: [OpDef; Opcode::Count as usize] = [
         nb_cargs: 3,
         flags: f(CC, NP),
     },
+    // PluginCb
+    OpDef {
+        name: "plugin_cb",
+        nb_oargs: 0,
+        nb_iargs: 0,
+        nb_cargs: 1,
+        flags: NP,
+    },
+    // PluginMemCb
+    OpDef {
+        name: "plugin_mem_cb",
+        nb_oargs: 0,
+        nb_iargs: 1,
+        nb_cargs: 1,
+        flags: NP,
+    },
     // Nop
     OpDef {
         name: "nop",
@@ -822,6 +939,359 @@ pub static OPCODE_DEFS: [OpDef; Opcode::Count as usize] = [
         nb_cargs: 2,
         flags: NP,
     },
+    // -- Vector ops --
+    // MovVec
+    OpDef {
+        name: "mov_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 0,
+        flags: f(VC, NP),
+    },
+    // DupVec
+    OpDef {
+        name: "dup_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // Dup2Vec
+    OpDef {
+        name: "dup2_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // LdVec
+    OpDef {
+        name: "ld_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 1,
+        flags: VC,
+    },
+    // StVec
+    OpDef {
+        name: "st_vec",
+        nb_oargs: 0,
+        nb_iargs: 2,
+        nb_cargs: 1,
+        flags: VC,
+    },
+    // DupmVec
+    OpDef {
+        name: "dupm_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 1,
+        flags: VC,
+    },
+    // AddVec
+    OpDef {
+        name: "add_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // SubVec
+    OpDef {
+        name: "sub_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // MulVec
+    OpDef {
+        name: "mul_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // NegVec
+    OpDef {
+        name: "neg_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // AbsVec
+    OpDef {
+        name: "abs_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // SsaddVec
+    OpDef {
+        name: "ssadd_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // UsaddVec
+    OpDef {
+        name: "usadd_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // SssubVec
+    OpDef {
+        name: "sssub_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // UssubVec
+    OpDef {
+        name: "ussub_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // SminVec
+    OpDef {
+        name: "smin_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // UminVec
+    OpDef {
+        name: "umin_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // SmaxVec
+    OpDef {
+        name: "smax_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // UmaxVec
+    OpDef {
+        name: "umax_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // AndVec
+    OpDef {
+        name: "and_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // OrVec
+    OpDef {
+        name: "or_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // XorVec
+    OpDef {
+        name: "xor_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // AndcVec
+    OpDef {
+        name: "andc_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // OrcVec
+    OpDef {
+        name: "orc_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // NandVec
+    OpDef {
+        name: "nand_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // NorVec
+    OpDef {
+        name: "nor_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // EqvVec
+    OpDef {
+        name: "eqv_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // NotVec
+    OpDef {
+        name: "not_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // ShliVec
+    OpDef {
+        name: "shli_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 1,
+        flags: VC,
+    },
+    // ShriVec
+    OpDef {
+        name: "shri_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 1,
+        flags: VC,
+    },
+    // SariVec
+    OpDef {
+        name: "sari_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 1,
+        flags: VC,
+    },
+    // RotliVec
+    OpDef {
+        name: "rotli_vec",
+        nb_oargs: 1,
+        nb_iargs: 1,
+        nb_cargs: 1,
+        flags: VC,
+    },
+    // ShlsVec
+    OpDef {
+        name: "shls_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // ShrsVec
+    OpDef {
+        name: "shrs_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // SarsVec
+    OpDef {
+        name: "sars_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // RotlsVec
+    OpDef {
+        name: "rotls_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // ShlvVec
+    OpDef {
+        name: "shlv_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // ShrvVec
+    OpDef {
+        name: "shrv_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // SarvVec
+    OpDef {
+        name: "sarv_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // RotlvVec
+    OpDef {
+        name: "rotlv_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // RotrvVec
+    OpDef {
+        name: "rotrv_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // CmpVec
+    OpDef {
+        name: "cmp_vec",
+        nb_oargs: 1,
+        nb_iargs: 2,
+        nb_cargs: 1,
+        flags: VC,
+    },
+    // BitselVec
+    OpDef {
+        name: "bitsel_vec",
+        nb_oargs: 1,
+        nb_iargs: 3,
+        nb_cargs: 0,
+        flags: VC,
+    },
+    // CmpselVec
+    OpDef {
+        name: "cmpsel_vec",
+        nb_oargs: 1,
+        nb_iargs: 4,
+        nb_cargs: 1,
+        flags: VC,
+    },
 ];
 
 impl Opcode {
@@ -834,7 +1304,10 @@ impl Opcode {
     pub fn fixed_type(self) -> Option<Type> {
         match self {
             Opcode::ExtI32I64 | Opcode::ExtUI32I64 => Some(Type::I64),
-            Opcode::ExtrlI64I32 | Opcode::ExtrhI64I32 => Some(Type::I32),
+            Opcode::ExtrlI64I32
+            | Opcode::ExtrhI64I32
+            | Opcode::BrCond2I32
+            | Opcode::SetCond2I32 => Some(Type::I32),
             _ => None,
         }
     }
@@ -842,5 +1315,10 @@ impl Opcode {
     /// Whether this opcode is type-polymorphic (works on I32 or I64).
     pub fn is_int_polymorphic(self) -> bool {
         self.def().flags.contains(OpFlags::INT)
+    }
+
+    /// Whether this is a vector operation.
+    pub fn is_vector(self) -> bool {
+        self.def().flags.contains(OpFlags::VECTOR)
     }
 }
