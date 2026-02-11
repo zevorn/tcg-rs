@@ -105,11 +105,12 @@ impl TranslatorOps for RiscvTranslator {
 
         // Dispatch through decodetree-generated decoder.
         if !insn_decode::decode(ctx, ir, insn) {
-            // Unrecognized instruction — sync PC and exit.
+            // Unrecognized instruction — sync PC and exit
+            // with SIGILL-like code.
             let pc_val = ctx.base.pc_next;
             let pc_const = ir.new_const(Type::I64, pc_val);
             ir.gen_mov(Type::I64, ctx.pc, pc_const);
-            ir.gen_exit_tb(0);
+            ir.gen_exit_tb(3);
             ctx.base.is_jmp = DisasJumpType::NoReturn;
         }
 
