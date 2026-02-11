@@ -43,7 +43,7 @@ Signed-off-by: Name <email>
 
 - 与 subject 之间空一行
 - 说明本次变更的内容和原因（what & why），而非如何实现（how）
-- 每行不超过 72 字符
+- 每行不超过 80 字符
 
 **示例**：
 
@@ -180,12 +180,12 @@ x86-64 后端位于 `backend/src/x86_64/`，包含三个文件：
 
 ## 代码风格
 
-代码行宽不超过 **80 列**。详细规范见 [`docs/coding-style.md`](docs/coding-style.md)。
+代码行宽不超过 **80 列**（`.md` 文档文件不受此限制）。详细规范见 [`docs/coding-style.md`](docs/coding-style.md)。
 
 核心规则：
 
 - 缩进使用 4 个空格，禁止 Tab
-- 代码行宽上限 80 列，注释和文档同样遵守
+- 代码行宽上限 80 列，代码注释同样遵守；`.md` 文档文件不限列宽
 - 运行 `cargo fmt` 格式化，`cargo clippy -- -D warnings` 零警告
 - 注释使用英文，仅在关键逻辑处添加
 - 常量命名：QEMU 风格的操作码常量允许 `non_upper_case_globals`
