@@ -1288,8 +1288,7 @@ fn test_exec_divs2() {
     let divs_ah: i64 = 0;
     let divs_b: i64 = 7;
 
-    let divs_dividend =
-        ((divs_ah as i128) << 64) | (divs_al as u64 as i128);
+    let divs_dividend = ((divs_ah as i128) << 64) | (divs_al as u64 as i128);
     let divs_q = divs_dividend / (divs_b as i128);
     let divs_r = divs_dividend % (divs_b as i128);
     let divs_q_lo = divs_q as u64;
@@ -1328,8 +1327,7 @@ fn test_exec_divu2() {
     let divu_ah: u64 = 0;
     let divu_b: u64 = 3;
 
-    let divu_dividend =
-        ((divu_ah as u128) << 64) | (divu_al as u128);
+    let divu_dividend = ((divu_ah as u128) << 64) | (divu_al as u128);
     let divu_q = divu_dividend / (divu_b as u128);
     let divu_r = divu_dividend % (divu_b as u128);
     let divu_q_lo = divu_q as u64;
@@ -1456,9 +1454,25 @@ fn test_exec_negsetcond_movcond() {
         ctx.gen_negsetcond(Type::I64, t_nsc_false, c5, c6, tcg_core::Cond::Eq);
         ctx.gen_mov(Type::I64, regs[11], t_nsc_false);
 
-        ctx.gen_movcond(Type::I64, t_mov_true, c5, c5, v1a, v2a, tcg_core::Cond::Eq);
+        ctx.gen_movcond(
+            Type::I64,
+            t_mov_true,
+            c5,
+            c5,
+            v1a,
+            v2a,
+            tcg_core::Cond::Eq,
+        );
         ctx.gen_mov(Type::I64, regs[12], t_mov_true);
-        ctx.gen_movcond(Type::I64, t_mov_false, c5, c6, v1b, v2b, tcg_core::Cond::Eq);
+        ctx.gen_movcond(
+            Type::I64,
+            t_mov_false,
+            c5,
+            c6,
+            v1b,
+            v2b,
+            tcg_core::Cond::Eq,
+        );
         ctx.gen_mov(Type::I64, regs[13], t_mov_false);
 
         ctx.gen_exit_tb(0);
