@@ -9,7 +9,7 @@ use super::insn_decode::*;
 use super::RiscvDisasContext;
 use crate::DisasJumpType;
 use tcg_core::context::Context;
-use tcg_core::types::{Cond, Type};
+use tcg_core::types::{Cond, MemOp, Type};
 use tcg_core::TempIdx;
 
 /// Binary IR operation: `fn(ir, ty, dst, lhs, rhs) -> dst`.
@@ -44,6 +44,41 @@ impl RiscvDisasContext {
     }
 
     // -- R-type helpers ------------------------------------
+
+    // -- Guest memory helpers --------------------------------
+
+    /// Guest load: rd = *(addr), addr = rs1 + imm.
+    fn gen_load(&self, ir: &mut Context, a: &ArgsI, memop: MemOp) -> bool {
+        let base = self.gpr_or_zero(ir, a.rs1);
+        let addr = if a.imm != 0 {
+            let imm = ir.new_const(Type::I64, a.imm as u64);
+            let t = ir.new_temp(Type::I64);
+            ir.gen_add(Type::I64, t, base, imm)
+        } else {
+            base
+        };
+        let dst = ir.new_temp(Type::I64);
+        ir.gen_qemu_ld(Type::I64, dst, addr, memop.bits() as u32);
+        self.gen_set_gpr(ir, a.rd, dst);
+        true
+    }
+
+    /// Guest store: *(addr) = rs2, addr = rs1 + imm.
+    fn gen_store(&self, ir: &mut Context, a: &ArgsS, memop: MemOp) -> bool {
+        let base = self.gpr_or_zero(ir, a.rs1);
+        let addr = if a.imm != 0 {
+            let imm = ir.new_const(Type::I64, a.imm as u64);
+            let t = ir.new_temp(Type::I64);
+            ir.gen_add(Type::I64, t, base, imm)
+        } else {
+            base
+        };
+        let val = self.gpr_or_zero(ir, a.rs2);
+        ir.gen_qemu_st(Type::I64, val, addr, memop.bits() as u32);
+        true
+    }
+
+    // -- R-type ALU helpers ----------------------------------
 
     /// R-type ALU: `rd = op(rs1, rs2)`.
     fn gen_arith(&self, ir: &mut Context, a: &ArgsR, op: BinOp) -> bool {
@@ -260,34 +295,34 @@ impl Decode<Context> for RiscvDisasContext {
         true
     }
 
-    // ── RV32I: Loads (need guest memory ops) ───────────
+    // ── RV32I: Loads ──────────────────────────────────
 
-    fn trans_lb(&mut self, _ir: &mut Context, _a: &ArgsI) -> bool {
-        false
+    fn trans_lb(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        self.gen_load(ir, a, MemOp::sb())
     }
-    fn trans_lh(&mut self, _ir: &mut Context, _a: &ArgsI) -> bool {
-        false
+    fn trans_lh(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        self.gen_load(ir, a, MemOp::sw())
     }
-    fn trans_lw(&mut self, _ir: &mut Context, _a: &ArgsI) -> bool {
-        false
+    fn trans_lw(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        self.gen_load(ir, a, MemOp::sl())
     }
-    fn trans_lbu(&mut self, _ir: &mut Context, _a: &ArgsI) -> bool {
-        false
+    fn trans_lbu(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        self.gen_load(ir, a, MemOp::ub())
     }
-    fn trans_lhu(&mut self, _ir: &mut Context, _a: &ArgsI) -> bool {
-        false
+    fn trans_lhu(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        self.gen_load(ir, a, MemOp::uw())
     }
 
-    // ── RV32I: Stores (need guest memory ops) ──────────
+    // ── RV32I: Stores ─────────────────────────────────
 
-    fn trans_sb(&mut self, _ir: &mut Context, _a: &ArgsS) -> bool {
-        false
+    fn trans_sb(&mut self, ir: &mut Context, a: &ArgsS) -> bool {
+        self.gen_store(ir, a, MemOp::ub())
     }
-    fn trans_sh(&mut self, _ir: &mut Context, _a: &ArgsS) -> bool {
-        false
+    fn trans_sh(&mut self, ir: &mut Context, a: &ArgsS) -> bool {
+        self.gen_store(ir, a, MemOp::uw())
     }
-    fn trans_sw(&mut self, _ir: &mut Context, _a: &ArgsS) -> bool {
-        false
+    fn trans_sw(&mut self, ir: &mut Context, a: &ArgsS) -> bool {
+        self.gen_store(ir, a, MemOp::ul())
     }
 
     // ── RV32I: ALU immediate ───────────────────────────
@@ -380,14 +415,14 @@ impl Decode<Context> for RiscvDisasContext {
 
     // ── RV64I: Loads / Stores (need guest memory) ──────
 
-    fn trans_lwu(&mut self, _ir: &mut Context, _a: &ArgsI) -> bool {
-        false
+    fn trans_lwu(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        self.gen_load(ir, a, MemOp::ul())
     }
-    fn trans_ld(&mut self, _ir: &mut Context, _a: &ArgsI) -> bool {
-        false
+    fn trans_ld(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        self.gen_load(ir, a, MemOp::uq())
     }
-    fn trans_sd(&mut self, _ir: &mut Context, _a: &ArgsS) -> bool {
-        false
+    fn trans_sd(&mut self, ir: &mut Context, a: &ArgsS) -> bool {
+        self.gen_store(ir, a, MemOp::uq())
     }
 
     // ── RV64I: W-suffix ALU ────────────────────────────
