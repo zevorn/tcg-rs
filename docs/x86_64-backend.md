@@ -199,17 +199,33 @@ QEMU 的 `tcg_target_op_def()`（`tcg/i386/tcg-target.c.inc`）。
 | Mul | `o1_i2_alias(R, R, R)` | `C_O1_I2(r,0,r)` | IMUL 二地址 |
 | And/Or/Xor | `o1_i2_alias(R, R, R)` | `C_O1_I2(r,0,re)` | 破坏性二元运算 |
 | Neg/Not | `o1_i1_alias(R, R)` | `C_O1_I1(r,0)` | 原地一元运算 |
-| Shl/Shr/Sar | `o1_i2_alias_fixed(R, R, RCX)` | `C_O1_I2(r,0,ci)` | 别名 + count 固定 RCX |
-| SetCond | `n1_i2(R, R, R)` | `C_N1_I2(r,r,re)` | newreg（setcc 只写低字节） |
+| Shl/Shr/Sar/RotL/RotR | `o1_i2_alias_fixed(R_NO_RCX, R_NO_RCX, RCX)` | `C_O1_I2(r,0,ci)` | 别名 + count 固定 RCX，R_NO_RCX 排除 RCX 防冲突 |
+| SetCond/NegSetCond | `n1_i2(R, R, R)` | `C_N1_I2(r,r,re)` | newreg（setcc 只写低字节） |
+| MovCond | `o1_i4_alias2(R, R, R, R, R)` | `C_O1_I4(r,r,r,0,r)` | 输出别名 input2（CMP+CMOV） |
 | BrCond | `o0_i2(R, R)` | `C_O0_I2(r,re)` | 无输出 |
-| Ld | `o1_i1(R, R)` | — | 无别名 |
-| St | `o0_i2(R, R)` | — | 无输出 |
+| MulS2/MulU2 | `o2_i2_fixed(RAX, RDX, R_NO_RAX_RDX)` | `C_O2_I2(r,r,0,r)` | 双固定输出，R_NO_RAX_RDX 排除 RAX/RDX 防冲突 |
+| DivS2/DivU2 | `o2_i3_fixed(RAX, RDX, R_NO_RAX_RDX)` | `C_O2_I3(r,r,0,1,r)` | 双固定输出+双别名，R_NO_RAX_RDX 排除 RAX/RDX |
+| AddCO/AddCI/AddCIO/AddC1O | `o1_i2_alias(R, R, R)` | — | 进位算术，破坏性 |
+| SubBO/SubBI/SubBIO/SubB1O | `o1_i2_alias(R, R, R)` | — | 借位算术，破坏性 |
+| AndC | `o1_i2(R, R, R)` | — | 三地址 ANDN (BMI1) |
+| Extract/SExtract | `o1_i1(R, R)` | — | 位域提取 |
+| Deposit | `o1_i2_alias(R, R, R)` | — | 位域插入，破坏性 |
+| Extract2 | `o1_i2_alias(R, R, R)` | — | 双寄存器提取 (SHRD) |
+| Bswap16/32/64 | `o1_i1_alias(R, R)` | — | 字节交换，原地 |
+| Clz/Ctz | `n1_i2(R, R, R)` | — | 位计数 + fallback |
+| CtPop | `o1_i1(R, R)` | — | 人口计数 |
+| ExtrhI64I32 | `o1_i1_alias(R, R)` | — | 高 32 位提取 |
+| Ld/Ld* | `o1_i1(R, R)` | — | 无别名 |
+| St/St* | `o0_i2(R, R)` | — | 无输出 |
+| GotoPtr | `o0_i1(R)` | — | 间接跳转 |
 
-其中 `R = ALLOCATABLE_REGS`（14 个 GPR，排除 RSP 和 RBP）。
+其中 `R = ALLOCATABLE_REGS`（14 个 GPR，排除 RSP 和 RBP），`R_NO_RCX = R & ~{RCX}`，`R_NO_RAX_RDX = R & ~{RAX, RDX}`。
 
 约束保证使 codegen 可以假设：
 - 破坏性运算的 `oregs[0] == iregs[0]`（无需 mov 前置）
 - 移位的 `iregs[1] == RCX`（无需 push/pop RCX 杂耍）
+- 移位的 output/input0 不在 RCX（R_NO_RCX 排除）
+- MulS2/DivS2 的自由 input 不在 RAX/RDX（R_NO_RAX_RDX 排除）
 - SetCond 的输出不与任何输入重叠
 
 ## 7. Codegen 分派 (`codegen.rs`)
@@ -238,13 +254,30 @@ QEMU 的 `tcg_target_op_def()`（`tcg/i386/tcg-target.c.inc`）。
 | Mul | `imul d,b` | d==a (oalias) |
 | And/Or/Xor | `op d,b` | d==a (oalias) |
 | Neg/Not | `neg/not d` | d==a (oalias) |
-| Shl/Shr/Sar | `shift d,cl` | d==a (oalias), count==RCX (fixed) |
+| Shl/Shr/Sar/RotL/RotR | `shift d,cl` | d==a (oalias), count==RCX (fixed) |
 | SetCond | `cmp a,b; setcc d; movzbl d,d` | d≠a, d≠b (newreg) |
+| NegSetCond | `cmp a,b; setcc d; movzbl d,d; neg d` | d≠a, d≠b (newreg) |
+| MovCond | `cmp a,b; cmovcc d,v2` | d==v1 (oalias input2) |
 | BrCond | `cmp a,b; jcc label` | 无输出 |
-| Ld | `mov d,[base+offset]` | — |
-| St | `mov [base+offset],s` | — |
+| MulS2/MulU2 | `mul/imul b` (RAX implicit) | o0=RAX, o1=RDX (fixed) |
+| DivS2/DivU2 | `cqo/xor; div/idiv b` | o0=RAX, o1=RDX (fixed) |
+| AddCO/SubBO | `add/sub d,b` (sets CF) | d==a (oalias) |
+| AddCI/SubBI | `adc/sbb d,b` (reads CF) | d==a (oalias) |
+| AddCIO/SubBIO | `adc/sbb d,b` (reads+sets CF) | d==a (oalias) |
+| AddC1O/SubB1O | `stc; adc/sbb d,b` | d==a (oalias) |
+| AndC | `andn d,b,a` (BMI1) | 三地址 |
+| Extract/SExtract | `shr`+`and` / `movzx` / `movsx` | — |
+| Deposit | `and`+`or` 组合 | d==a (oalias) |
+| Extract2 | `shrd d,b,imm` | d==a (oalias) |
+| Bswap16/32/64 | `ror`/`bswap` | d==a (oalias) |
+| Clz/Ctz | `lzcnt`/`tzcnt` | d≠a (newreg) |
+| CtPop | `popcnt d,a` | — |
+| ExtrhI64I32 | `shr d,32` | d==a (oalias) |
+| Ld/Ld* | `mov d,[base+offset]` | — |
+| St/St* | `mov [base+offset],s` | — |
 | ExitTb | `mov rax,val; jmp tb_ret` | — |
 | GotoTb | `jmp rel32` (可修补) | — |
+| GotoPtr | `jmp *reg` | — |
 
 ### 7.3 SetCond/BrCond 的 TstEq/TstNe 支持
 

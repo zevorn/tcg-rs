@@ -28,7 +28,7 @@ tcg-rs 旨在提供一个干净、安全、模块化的 QEMU TCG 子系统 Rust 
 | `tcg-backend` | 已实现 | 活跃性分析、约束系统、寄存器分配器、x86-64 代码生成、翻译流水线 |
 | `decodetree` | 已实现 | QEMU 风格 `.decode` 文件解析器和 Rust 代码生成器，用于生成指令解码器 |
 | `tcg-frontend` | 已实现 | 客户指令解码框架 + RISC-V RV64I+M 前端（65 条指令） |
-| `tcg-tests` | 已实现 | 688 个测试：单元测试、后端回归测试、前端翻译测试、差分测试（对比 QEMU）、端到端集成测试 |
+| `tcg-tests` | 已实现 | 704 个测试：单元测试、后端回归测试、前端翻译测试、差分测试（对比 QEMU）、端到端集成测试 |
 | `tcg-opt` | 计划中 | IR 优化器：常量/拷贝传播、DCE |
 | `tcg-exec` | 计划中 | CPU 执行循环、TB 缓存、TB 链接/失效 |
 | `tcg-mmu` | 计划中 | 软件 TLB、客户内存访问 |
@@ -46,7 +46,7 @@ tcg-rs 旨在提供一个干净、安全、模块化的 QEMU TCG 子系统 Rust 
 
 ```bash
 cargo build                  # 构建所有 crate
-cargo test                   # 运行全部 688 个测试
+cargo test                   # 运行全部 704 个测试
 cargo clippy -- -D warnings  # Lint 检查
 cargo fmt --check            # 格式检查
 ```

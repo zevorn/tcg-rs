@@ -28,7 +28,7 @@ tcg-rs aims to provide a clean, safe, and modular Rust implementation of QEMU's 
 | `tcg-backend` | Implemented | Liveness analysis, constraint system, register allocator, x86-64 codegen, translation pipeline |
 | `decodetree` | Implemented | QEMU-style `.decode` file parser and Rust code generator for instruction decoders |
 | `tcg-frontend` | Implemented | Guest instruction decoding framework + RISC-V RV64I+M frontend (65 instructions) |
-| `tcg-tests` | Implemented | 688 tests: unit, backend regression, frontend translation, difftest (vs QEMU), and end-to-end integration |
+| `tcg-tests` | Implemented | 704 tests: unit, backend regression, frontend translation, difftest (vs QEMU), and end-to-end integration |
 | `tcg-opt` | Planned | IR optimizer: constant/copy propagation, DCE |
 | `tcg-exec` | Planned | CPU execution loop, TB cache, TB linking/invalidation |
 | `tcg-mmu` | Planned | Software TLB, guest memory access |
@@ -46,7 +46,7 @@ tcg-rs aims to provide a clean, safe, and modular Rust implementation of QEMU's 
 
 ```bash
 cargo build                  # Build all crates
-cargo test                   # Run all 688 tests
+cargo test                   # Run all 704 tests
 cargo clippy -- -D warnings  # Lint check
 cargo fmt --check            # Format check
 ```

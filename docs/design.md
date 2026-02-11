@@ -229,6 +229,9 @@ struct OpConstraint {
 | `o1_i2_alias_fixed(o0, i0, reg)` | 别名 + 固定 | Shl/Shr/Sar (RCX) |
 | `n1_i2(o0, i0, i1)` | newreg 输出 | SetCond |
 | `o0_i2(i0, i1)` | 无输出 | BrCond/St |
+| `o2_i2_fixed(o0, o1, i1)` | 双固定输出 + 别名 | MulS2/MulU2 (RAX:RDX) |
+| `o2_i3_fixed(o0, o1, i2)` | 双固定输出 + 双别名 | DivS2/DivU2 (RAX:RDX) |
+| `o1_i4_alias2(o0, i0..i3)` | 输出别名 input2 | MovCond (CMOV) |
 
 ### 3.4 x86-64 栈帧布局 (`regs.rs`)
 
@@ -411,6 +414,8 @@ struct RegAllocState {
 | Br | sync → emit jmp | 无条件跳转 |
 | BrCond | 约束加载 → sync → emit cmp+jcc | 需要 sync 在 emit 之前 |
 | ExitTb/GotoTb | sync → 委托 tcg_out_op | TB 退出 |
+| GotoPtr | 约束加载 → sync → emit jmp *reg | 间接跳转 |
+| Mb | 直接 emit mfence | 内存屏障 |
 | **其他** | **`regalloc_op()`** | **通用约束驱动路径** |
 
 **为什么 BrCond 不走通用路径？** 因为 BrCond 需要在 emit 之前
@@ -421,7 +426,7 @@ emit 之后。此外 BrCond 的前向引用需要在 emit 之后记录
 #### 4.3.4 通用 op 处理流程（`regalloc_op`）
 
 以 `Sub t3, t1, t2`（约束 `o1_i2_alias`）为例，详细说明
-7 个阶段：
+8 个阶段：
 
 **阶段 1：处理输入**
 
@@ -477,18 +482,7 @@ Shl t3, t1, t2  (约束: o1_i2_alias_fixed(R, R, RCX))
 fixup 阶段重新读取：i_regs[0] = RDX（正确）。
 ```
 
-**阶段 3：释放死亡输入**
-
-```
-for i in 0..nb_iargs:
-    if life.is_dead(nb_oargs + i):
-        temp_dead(op.args[nb_oargs + i])
-```
-
-释放死亡输入的寄存器，使其可用于输出分配。注意全局变量和
-固定 temp 的 `temp_dead()` 是 no-op。
-
-**阶段 4：处理输出**
+**阶段 3：处理输出**
 
 ```
 for k in 0..nb_oargs:
@@ -540,6 +534,19 @@ Sub t3, t1, t2  (oalias: output aliases input 0)
   → emit: sub RAX, RBX  (RAX = RAX - RBX)
 ```
 
+**阶段 4：Fixup（输出可能驱逐/移动了输入）**
+
+```
+for i in 0..nb_iargs:
+    temp = ctx.temp(op.args[nb_oargs + i])
+    if temp.val_type == Reg:
+        i_regs[i] = temp.reg
+```
+
+输出分配可能需要特定寄存器（如 MulS2 的 RAX），导致占据该
+寄存器的输入被驱逐到其他寄存器。此 fixup 确保 `i_regs` 在
+emit 时反映输入的实际位置。
+
 **阶段 5：发射宿主代码**
 
 ```
@@ -553,7 +560,22 @@ backend.tcg_out_op(buf, ctx, op, &o_regs, &i_regs, &cargs)
 
 codegen 可以直接发射最简指令序列。
 
-**阶段 6：释放死亡输出**
+**阶段 6：释放死亡输入**
+
+```
+for i in 0..nb_iargs:
+    if life.is_dead(nb_oargs + i):
+        tidx = op.args[nb_oargs + i]
+        if tidx not in op.args[0..nb_oargs]:  // 跳过别名输出
+            temp_dead_input(tidx)
+```
+
+死亡输入在 emit 之后释放（而非之前），确保 `i_regs` 在代码
+发射期间始终有效。`temp_dead_input` 使用 `reg_to_temp` 守卫：
+仅当寄存器仍映射到该输入时才释放，避免释放已被别名输出接管
+的寄存器。
+
+**阶段 7：释放死亡输出**
 
 ```
 for k in 0..nb_oargs:
@@ -561,7 +583,7 @@ for k in 0..nb_oargs:
         temp_dead(op.args[k])
 ```
 
-**阶段 7：同步全局变量**
+**阶段 8：同步全局变量**
 
 ```
 for i in 0..nb_iargs:
@@ -609,9 +631,9 @@ forbidden 中），说明存在固定约束冲突。此时忽略 forbidden 集�
 
 ```
 IR:  Shl t3, t1, t2   (I64)
-约束: o1_i2_alias_fixed(R, R, RCX)
-  args[0] = t3 (output, oalias input 0)
-  args[1] = t1 (input, ialias output 0)
+约束: o1_i2_alias_fixed(R_NO_RCX, R_NO_RCX, RCX)
+  args[0] = t3 (output, oalias input 0, regs=R_NO_RCX)
+  args[1] = t1 (input, ialias output 0, regs=R_NO_RCX)
   args[2] = t2 (input, fixed RCX)
 
 初始状态: t1 在 RAX, t2 在 RBX, t1 和 t2 均在此 op 后死亡
@@ -621,7 +643,7 @@ IR:  Shl t3, t1, t2   (I64)
 
 ```
 input 0 (t1): ialias=true, dead=true, !readonly
-  required = R (所有可分配寄存器)
+  required = R_NO_RCX (排除 RCX 的可分配寄存器)
   forbidden = EMPTY
   preferred = output_pref[0]
   → t1 已在 RAX (满足 required) → i_regs[0] = RAX
@@ -645,14 +667,7 @@ input 1 (t2): fixed RCX
 （本例无冲突，fixup 无变化）
 ```
 
-**Step 3 — 释放死亡输入**：
-
-```
-t1 dead → temp_dead(t1): 释放 RAX（但 oalias 会复用）
-t2 dead → temp_dead(t2): 释放 RCX
-```
-
-**Step 4 — 处理输出**：
+**Step 3 — 处理输出**：
 
 ```
 output 0 (t3): oalias, alias_index=0
@@ -661,12 +676,23 @@ output 0 (t3): oalias, alias_index=0
   → o_regs[0] = RAX
 ```
 
-**Step 5 — Emit**：
+**Step 4 — Fixup + Emit**：
 
 ```
+i_regs fixup: 无变化（输出未驱逐输入）
 backend.tcg_out_op(Shl, oregs=[RAX], iregs=[RAX, RCX])
   → emit: shl RAX, cl    (一条指令，无需 mov/push/pop)
 ```
+
+**Step 5 — 释放死亡输入**：
+
+```
+t1 dead, 但 t1==t3 (别名) → 跳过
+t2 dead → temp_dead_input(t2): 释放 RCX
+```
+
+`R_NO_RCX` 约束确保 input0/output 不会被分配到 RCX，从根本上
+避免了 output 与 fixed shift-count 的寄存器冲突。
 
 #### 4.3.8 与 QEMU 的差异
 
@@ -800,7 +826,7 @@ fn gen_branch(&mut self, ir: &mut Context, rs1: usize, rs2: usize, imm: i64, con
 | 后端回归测试 | `tests/src/backend/` | ~300 | x86-64 指令编码、codegen 别名 |
 | 前端翻译测试 | `tests/src/frontend/mod.rs` | 58 | 全流水线 RISC-V 指令测试 |
 | 差分测试 | `tests/src/frontend/difftest.rs` | 35 | 对比 QEMU qemu-riscv64 |
-| 集成测试 | `tests/src/integration/` | ~30 | 端到端 IR→执行 |
+| 集成测试 | `tests/src/integration/` | ~42 | 端到端 IR→执行 |
 
 ---
 
