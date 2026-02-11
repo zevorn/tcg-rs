@@ -5,6 +5,7 @@ members = [
     "frontend",
     "decodetree",
     "exec",
+    "linux-user",
     "tests",
 ]
 resolver = "2"
