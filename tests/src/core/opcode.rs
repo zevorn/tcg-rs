@@ -1,5 +1,48 @@
+use tcg_core::op::MAX_OP_ARGS;
 use tcg_core::opcode::*;
 use tcg_core::types::Type;
+
+fn assert_def(
+    opc: Opcode,
+    nb_oargs: u8,
+    nb_iargs: u8,
+    nb_cargs: u8,
+    flags: OpFlags,
+) {
+    let def = opc.def();
+    assert_eq!(def.nb_oargs, nb_oargs, "{:?} nb_oargs", opc);
+    assert_eq!(def.nb_iargs, nb_iargs, "{:?} nb_iargs", opc);
+    assert_eq!(def.nb_cargs, nb_cargs, "{:?} nb_cargs", opc);
+    assert_eq!(
+        def.nb_args(),
+        nb_oargs + nb_iargs + nb_cargs,
+        "{:?} nb_args",
+        opc
+    );
+    assert!(
+        def.nb_args() as usize <= MAX_OP_ARGS,
+        "{:?} args exceed MAX_OP_ARGS",
+        opc
+    );
+    assert_eq!(def.flags.bits(), flags.bits(), "{:?} flags", opc);
+    assert!(!def.name.is_empty(), "{:?} empty name", opc);
+}
+
+fn assert_group(
+    seen: &mut [bool],
+    ops: &[Opcode],
+    nb_oargs: u8,
+    nb_iargs: u8,
+    nb_cargs: u8,
+    flags: OpFlags,
+) {
+    for &opc in ops {
+        let idx = opc as usize;
+        assert!(!seen[idx], "opcode {:?} duplicated", opc);
+        seen[idx] = true;
+        assert_def(opc, nb_oargs, nb_iargs, nb_cargs, flags);
+    }
+}
 
 #[test]
 fn opcode_def_table_size() {
@@ -98,4 +141,279 @@ fn opcode_load_store_args() {
     assert_eq!(st.nb_oargs, 0);
     assert_eq!(st.nb_iargs, 2);
     assert_eq!(st.nb_cargs, 1);
+}
+
+#[test]
+fn opcode_def_full_coverage() {
+    let int = OpFlags::INT;
+    let np = OpFlags::NOT_PRESENT;
+    let se = OpFlags::SIDE_EFFECTS;
+    let cc = OpFlags::CALL_CLOBBER;
+    let be = OpFlags::BB_END;
+    let bx = OpFlags::BB_EXIT;
+    let cb = OpFlags::COND_BRANCH;
+    let co = OpFlags::CARRY_OUT;
+    let ci = OpFlags::CARRY_IN;
+    let vc = OpFlags::VECTOR;
+    let none = OpFlags::NONE;
+
+    let int_np = int.union(np);
+    let int_co = int.union(co);
+    let int_ci = int.union(ci);
+    let int_ci_co = int.union(ci).union(co);
+    let be_np = be.union(np);
+    let be_cb = be.union(cb);
+    let be_cb_int = be.union(cb).union(int);
+    let bx_be_np = bx.union(be).union(np);
+    let bx_be = bx.union(be);
+    let cc_np = cc.union(np);
+    let cc_se_int = cc.union(se).union(int);
+    let vc_np = vc.union(np);
+
+    let mut seen = vec![false; Opcode::Count as usize];
+
+    assert_group(&mut seen, &[Opcode::Mov], 1, 1, 0, int_np);
+    assert_group(
+        &mut seen,
+        &[Opcode::SetCond, Opcode::NegSetCond],
+        1,
+        2,
+        1,
+        int,
+    );
+    assert_group(&mut seen, &[Opcode::MovCond], 1, 4, 1, int);
+
+    assert_group(
+        &mut seen,
+        &[
+            Opcode::Add,
+            Opcode::Sub,
+            Opcode::Mul,
+            Opcode::DivS,
+            Opcode::DivU,
+            Opcode::RemS,
+            Opcode::RemU,
+            Opcode::MulSH,
+            Opcode::MulUH,
+            Opcode::And,
+            Opcode::Or,
+            Opcode::Xor,
+            Opcode::AndC,
+            Opcode::OrC,
+            Opcode::Eqv,
+            Opcode::Nand,
+            Opcode::Nor,
+            Opcode::Shl,
+            Opcode::Shr,
+            Opcode::Sar,
+            Opcode::RotL,
+            Opcode::RotR,
+            Opcode::Clz,
+            Opcode::Ctz,
+        ],
+        1,
+        2,
+        0,
+        int,
+    );
+    assert_group(
+        &mut seen,
+        &[Opcode::Neg, Opcode::Not, Opcode::CtPop],
+        1,
+        1,
+        0,
+        int,
+    );
+    assert_group(
+        &mut seen,
+        &[Opcode::DivS2, Opcode::DivU2],
+        2,
+        3,
+        0,
+        int,
+    );
+    assert_group(
+        &mut seen,
+        &[Opcode::MulS2, Opcode::MulU2],
+        2,
+        2,
+        0,
+        int,
+    );
+    assert_group(
+        &mut seen,
+        &[Opcode::AddCO, Opcode::AddC1O, Opcode::SubBO, Opcode::SubB1O],
+        1,
+        2,
+        0,
+        int_co,
+    );
+    assert_group(&mut seen, &[Opcode::AddCI, Opcode::SubBI], 1, 2, 0, int_ci);
+    assert_group(
+        &mut seen,
+        &[Opcode::AddCIO, Opcode::SubBIO],
+        1,
+        2,
+        0,
+        int_ci_co,
+    );
+
+    assert_group(
+        &mut seen,
+        &[Opcode::Extract, Opcode::SExtract],
+        1,
+        1,
+        2,
+        int,
+    );
+    assert_group(&mut seen, &[Opcode::Deposit], 1, 2, 2, int);
+    assert_group(&mut seen, &[Opcode::Extract2], 1, 2, 1, int);
+    assert_group(
+        &mut seen,
+        &[Opcode::Bswap16, Opcode::Bswap32, Opcode::Bswap64],
+        1,
+        1,
+        1,
+        int,
+    );
+
+    assert_group(&mut seen, &[Opcode::BrCond2I32], 0, 4, 2, be_cb);
+    assert_group(&mut seen, &[Opcode::SetCond2I32], 1, 4, 1, none);
+    assert_group(
+        &mut seen,
+        &[
+            Opcode::ExtI32I64,
+            Opcode::ExtUI32I64,
+            Opcode::ExtrlI64I32,
+            Opcode::ExtrhI64I32,
+        ],
+        1,
+        1,
+        0,
+        none,
+    );
+
+    assert_group(
+        &mut seen,
+        &[
+            Opcode::Ld8U,
+            Opcode::Ld8S,
+            Opcode::Ld16U,
+            Opcode::Ld16S,
+            Opcode::Ld32U,
+            Opcode::Ld32S,
+            Opcode::Ld,
+        ],
+        1,
+        1,
+        1,
+        int,
+    );
+    assert_group(
+        &mut seen,
+        &[Opcode::St8, Opcode::St16, Opcode::St32, Opcode::St],
+        0,
+        2,
+        1,
+        int,
+    );
+
+    assert_group(&mut seen, &[Opcode::QemuLd], 1, 1, 1, cc_se_int);
+    assert_group(&mut seen, &[Opcode::QemuSt], 0, 2, 1, cc_se_int);
+    assert_group(&mut seen, &[Opcode::QemuLd2], 2, 1, 1, cc_se_int);
+    assert_group(&mut seen, &[Opcode::QemuSt2], 0, 3, 1, cc_se_int);
+
+    assert_group(&mut seen, &[Opcode::Br, Opcode::SetLabel], 0, 0, 1, be_np);
+    assert_group(&mut seen, &[Opcode::BrCond], 0, 2, 2, be_cb_int);
+    assert_group(
+        &mut seen,
+        &[Opcode::GotoTb, Opcode::ExitTb],
+        0,
+        0,
+        1,
+        bx_be_np,
+    );
+    assert_group(&mut seen, &[Opcode::GotoPtr], 0, 1, 0, bx_be);
+    assert_group(&mut seen, &[Opcode::Mb, Opcode::PluginCb], 0, 0, 1, np);
+
+    assert_group(&mut seen, &[Opcode::Call], 0, 0, 3, cc_np);
+    assert_group(&mut seen, &[Opcode::PluginMemCb], 0, 1, 1, np);
+    assert_group(&mut seen, &[Opcode::Nop], 0, 0, 0, np);
+    assert_group(&mut seen, &[Opcode::Discard], 1, 0, 0, np);
+    assert_group(&mut seen, &[Opcode::InsnStart], 0, 0, 2, np);
+
+    assert_group(&mut seen, &[Opcode::MovVec], 1, 1, 0, vc_np);
+    assert_group(
+        &mut seen,
+        &[Opcode::DupVec, Opcode::NegVec, Opcode::AbsVec, Opcode::NotVec],
+        1,
+        1,
+        0,
+        vc,
+    );
+    assert_group(
+        &mut seen,
+        &[
+            Opcode::Dup2Vec,
+            Opcode::AddVec,
+            Opcode::SubVec,
+            Opcode::MulVec,
+            Opcode::SsaddVec,
+            Opcode::UsaddVec,
+            Opcode::SssubVec,
+            Opcode::UssubVec,
+            Opcode::SminVec,
+            Opcode::UminVec,
+            Opcode::SmaxVec,
+            Opcode::UmaxVec,
+            Opcode::AndVec,
+            Opcode::OrVec,
+            Opcode::XorVec,
+            Opcode::AndcVec,
+            Opcode::OrcVec,
+            Opcode::NandVec,
+            Opcode::NorVec,
+            Opcode::EqvVec,
+            Opcode::ShlsVec,
+            Opcode::ShrsVec,
+            Opcode::SarsVec,
+            Opcode::RotlsVec,
+            Opcode::ShlvVec,
+            Opcode::ShrvVec,
+            Opcode::SarvVec,
+            Opcode::RotlvVec,
+            Opcode::RotrvVec,
+        ],
+        1,
+        2,
+        0,
+        vc,
+    );
+    assert_group(
+        &mut seen,
+        &[
+            Opcode::LdVec,
+            Opcode::DupmVec,
+            Opcode::ShliVec,
+            Opcode::ShriVec,
+            Opcode::SariVec,
+            Opcode::RotliVec,
+        ],
+        1,
+        1,
+        1,
+        vc,
+    );
+    assert_group(&mut seen, &[Opcode::StVec], 0, 2, 1, vc);
+    assert_group(&mut seen, &[Opcode::CmpVec], 1, 2, 1, vc);
+    assert_group(&mut seen, &[Opcode::BitselVec], 1, 3, 0, vc);
+    assert_group(&mut seen, &[Opcode::CmpselVec], 1, 4, 1, vc);
+
+    let missing: Vec<&'static str> = seen
+        .iter()
+        .enumerate()
+        .filter(|(_, covered)| !**covered)
+        .map(|(idx, _)| OPCODE_DEFS[idx].name)
+        .collect();
+    assert!(missing.is_empty(), "opcodes not covered: {:?}", missing);
 }
