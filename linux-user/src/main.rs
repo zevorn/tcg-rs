@@ -74,8 +74,8 @@ fn main() {
         process::exit(1);
     }
 
-    let elf_path = std::fs::canonicalize(&args[1])
-        .expect("failed to resolve elf path");
+    let elf_path =
+        std::fs::canonicalize(&args[1]).expect("failed to resolve elf path");
     let elf_path = elf_path.to_str().unwrap();
     let guest_argv: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
 

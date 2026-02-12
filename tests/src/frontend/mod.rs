@@ -975,24 +975,16 @@ fn rv_r4(
         | op
 }
 
-fn fmadd_s(
-    rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32,
-) -> u32 {
+fn fmadd_s(rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32) -> u32 {
     rv_r4(rs3, 0b00, rs2, rs1, rm, rd, OP_FMADD)
 }
-fn fmsub_s(
-    rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32,
-) -> u32 {
+fn fmsub_s(rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32) -> u32 {
     rv_r4(rs3, 0b00, rs2, rs1, rm, rd, OP_FMSUB)
 }
-fn fnmsub_s(
-    rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32,
-) -> u32 {
+fn fnmsub_s(rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32) -> u32 {
     rv_r4(rs3, 0b00, rs2, rs1, rm, rd, OP_FNMSUB)
 }
-fn fnmadd_s(
-    rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32,
-) -> u32 {
+fn fnmadd_s(rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32) -> u32 {
     rv_r4(rs3, 0b00, rs2, rs1, rm, rd, OP_FNMADD)
 }
 
@@ -1239,7 +1231,7 @@ fn test_fadd_s() {
     // f1 = 1.0f, f2 = 2.0f
     cpu.fpr[1] = nanbox(0x3f80_0000); // 1.0f
     cpu.fpr[2] = nanbox(0x4000_0000); // 2.0f
-    // FADD.S f3, f1, f2, rm=0 (RNE)
+                                      // FADD.S f3, f1, f2, rm=0 (RNE)
     run_rv(&mut cpu, fadd_s(3, 1, 2, 0));
     assert_eq!(cpu.fpr[3], nanbox(0x4040_0000)); // 3.0f
 }
@@ -1296,7 +1288,7 @@ fn test_fnmsub_s() {
     cpu.fpr[1] = nanbox(0x4000_0000); // 2.0f
     cpu.fpr[2] = nanbox(0x4040_0000); // 3.0f
     cpu.fpr[3] = nanbox(0x3f80_0000); // 1.0f
-    // FNMSUB: fma(-a, b, c) = -2*3 + 1 = -5.0
+                                      // FNMSUB: fma(-a, b, c) = -2*3 + 1 = -5.0
     run_rv(&mut cpu, fnmsub_s(4, 1, 2, 3, 0));
     assert_eq!(cpu.fpr[4], nanbox(0xc0a0_0000)); // -5.0f
 }
@@ -1307,7 +1299,7 @@ fn test_fnmadd_s() {
     cpu.fpr[1] = nanbox(0x4000_0000); // 2.0f
     cpu.fpr[2] = nanbox(0x4040_0000); // 3.0f
     cpu.fpr[3] = nanbox(0x3f80_0000); // 1.0f
-    // FNMADD: fma(-a, b, -c) = -2*3 - 1 = -7.0
+                                      // FNMADD: fma(-a, b, -c) = -2*3 - 1 = -7.0
     run_rv(&mut cpu, fnmadd_s(4, 1, 2, 3, 0));
     assert_eq!(cpu.fpr[4], nanbox(0xc0e0_0000)); // -7.0f
 }
