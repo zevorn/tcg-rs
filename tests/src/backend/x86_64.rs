@@ -185,17 +185,13 @@ fn exit_tb_nonzero() {
 }
 
 #[test]
-fn goto_tb_alignment() {
+fn goto_tb_no_alignment_padding() {
     let mut buf = CodeBuffer::new(4096).unwrap();
     let gen = X86_64CodeGen::new();
     let (jmp_offset, reset_offset) = gen.emit_goto_tb(&mut buf);
 
-    // The displacement field (at jmp_offset + 1) should be 4-byte aligned
-    assert_eq!(
-        (jmp_offset + 1) % 4,
-        0,
-        "goto_tb displacement should be 4-byte aligned"
-    );
+    // No alignment padding: JMP starts at offset 0
+    assert_eq!(jmp_offset, 0);
     // Reset offset should be 5 bytes after jmp_offset (E9 + 4 bytes)
     assert_eq!(reset_offset, jmp_offset + 5);
 }

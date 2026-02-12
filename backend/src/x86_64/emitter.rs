@@ -1201,11 +1201,9 @@ impl X86_64CodeGen {
     }
 
     /// Emit `goto_tb(n)`: a patchable direct jump (5 bytes: E9 + disp32).
+    ///
+    /// Single-threaded: no alignment needed for atomic patching.
     pub fn emit_goto_tb(&self, buf: &mut CodeBuffer) -> (usize, usize) {
-        let target_align = (buf.offset() + 1 + 3) & !3;
-        let nop_count = target_align - (buf.offset() + 1);
-        emit_nops(buf, nop_count);
-
         let jmp_offset = buf.offset();
         buf.emit_u8(0xE9);
         buf.emit_u32(0);
