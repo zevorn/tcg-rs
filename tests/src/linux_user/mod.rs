@@ -41,6 +41,27 @@ const GUEST_TESTS: &[GuestTest] = &[
             d=1.291667 f=3.875 i=3 u=4\n",
         ),
     },
+    GuestTest {
+        name: "dhrystone",
+        elf: "dhrystone",
+        args: &[],
+        expected_stdout: StdoutExpectation::Contains(&[
+            "Dhrystone Benchmark, Version 2.1 (Language: C)",
+            "Execution starts,",
+            "runs through Dhrystone",
+            "Execution ends",
+            "Final values of the variables used in the benchmark:",
+            "Int_Glob:            5",
+        ]),
+    },
+    GuestTest {
+        name: "argv_echo",
+        elf: "argv_echo",
+        args: &["foo", "bar baz"],
+        expected_stdout: StdoutExpectation::Exact(
+            "argc=3\narg1=foo\narg2=bar baz\n",
+        ),
+    },
 ];
 
 fn has_riscv_gcc() -> bool {
@@ -193,6 +214,18 @@ fn guest_hello_printf() {
 fn guest_hello_float() {
     ensure_built();
     assert_guest(&GUEST_TESTS[2]);
+}
+
+#[test]
+fn guest_dhrystone() {
+    ensure_built();
+    assert_guest(&GUEST_TESTS[3]);
+}
+
+#[test]
+fn guest_argv_echo() {
+    ensure_built();
+    assert_guest(&GUEST_TESTS[4]);
 }
 
 #[test]
