@@ -46,8 +46,8 @@ impl HostCodeGen for X86_64CodeGen {
     }
 
     fn patch_jump(
-        &mut self,
-        buf: &mut CodeBuffer,
+        &self,
+        buf: &CodeBuffer,
         jump_offset: usize,
         target_offset: usize,
     ) {
@@ -321,7 +321,7 @@ impl HostCodeGen for X86_64CodeGen {
             }
             Opcode::GotoTb => {
                 let (jmp, reset) = self.emit_goto_tb(buf);
-                self.goto_tb_info.borrow_mut().push((jmp, reset));
+                self.goto_tb_info.lock().unwrap().push((jmp, reset));
             }
             // -- Rotates: same pattern as shifts --
             Opcode::RotL | Opcode::RotR => {
@@ -649,11 +649,11 @@ impl HostCodeGen for X86_64CodeGen {
     }
 
     fn goto_tb_offsets(&self) -> Vec<(usize, usize)> {
-        self.goto_tb_info.borrow().clone()
+        self.goto_tb_info.lock().unwrap().clone()
     }
 
     fn clear_goto_tb_offsets(&self) {
-        self.goto_tb_info.borrow_mut().clear();
+        self.goto_tb_info.lock().unwrap().clear();
     }
 }
 

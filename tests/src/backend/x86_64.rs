@@ -185,15 +185,24 @@ fn exit_tb_nonzero() {
 }
 
 #[test]
-fn goto_tb_no_alignment_padding() {
+fn goto_tb_alignment_padding() {
     let mut buf = CodeBuffer::new(4096).unwrap();
     let gen = X86_64CodeGen::new();
     let (jmp_offset, reset_offset) = gen.emit_goto_tb(&mut buf);
 
-    // No alignment padding: JMP starts at offset 0
-    assert_eq!(jmp_offset, 0);
-    // Reset offset should be 5 bytes after jmp_offset (E9 + 4 bytes)
+    // disp32 starts at jmp_offset + 1 (after E9 opcode)
+    let disp_addr = jmp_offset + 1;
+    let base = buf.base_ptr() as usize;
+    // disp32 must be 4-byte aligned for atomic patching
+    assert_eq!(
+        (base + disp_addr) % 4,
+        0,
+        "goto_tb disp32 must be 4-byte aligned"
+    );
+    // Reset offset should be 5 bytes after jmp_offset
     assert_eq!(reset_offset, jmp_offset + 5);
+    // The E9 opcode should be at jmp_offset
+    assert_eq!(buf.as_slice()[jmp_offset], 0xE9);
 }
 
 #[test]
@@ -220,7 +229,7 @@ fn goto_ptr_extended_reg() {
 #[test]
 fn patch_jump_forward() {
     let mut buf = CodeBuffer::new(4096).unwrap();
-    let mut gen = X86_64CodeGen::new();
+    let gen = X86_64CodeGen::new();
 
     let jmp_offset = buf.offset();
     buf.emit_u8(0xE9);
@@ -232,7 +241,7 @@ fn patch_jump_forward() {
     }
     let target = buf.offset();
 
-    gen.patch_jump(&mut buf, jmp_offset, target);
+    gen.patch_jump(&buf, jmp_offset, target);
 
     // Verify displacement: target - (jmp_offset + 5)
     let expected_disp = (target as i32) - (jmp_offset as i32 + 5);

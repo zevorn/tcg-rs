@@ -16,7 +16,11 @@ pub struct CodeBuffer {
 }
 
 // SAFETY: CodeBuffer owns its mmap'd memory exclusively.
+// - emit_* methods require &mut self, serialized by translate_lock.
+// - patch_* methods use &self; aligned u32 writes are atomic.
+// - read methods (ptr_at, base_ptr) are inherently safe.
 unsafe impl Send for CodeBuffer {}
+unsafe impl Sync for CodeBuffer {}
 
 impl CodeBuffer {
     /// Allocate a new code buffer of the given size (rounded up to page size).
@@ -153,16 +157,30 @@ impl CodeBuffer {
 
     /// Patch a u8 at the given offset (for back-patching jumps).
     #[inline]
-    pub fn patch_u8(&mut self, offset: usize, val: u8) {
+    pub fn patch_u8(&self, offset: usize, val: u8) {
         assert!(offset < self.size);
         unsafe { self.ptr.add(offset).write(val) };
     }
 
     /// Patch a u32 at the given offset.
+    ///
+    /// For 4-byte aligned addresses, uses an atomic store so
+    /// concurrent readers (executing JIT code) see a consistent
+    /// value. Unaligned writes use a plain store (caller must
+    /// ensure no concurrent readers for unaligned patches).
     #[inline]
-    pub fn patch_u32(&mut self, offset: usize, val: u32) {
+    pub fn patch_u32(&self, offset: usize, val: u32) {
         assert!(offset + 4 <= self.size);
-        unsafe { (self.ptr.add(offset) as *mut u32).write_unaligned(val) };
+        let ptr = unsafe { self.ptr.add(offset) };
+        if (ptr as usize) % 4 == 0 {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            // SAFETY: ptr is within our mmap'd region and
+            // 4-byte aligned.
+            let atomic = unsafe { &*(ptr as *const AtomicU32) };
+            atomic.store(val, Ordering::Release);
+        } else {
+            unsafe { (ptr as *mut u32).write_unaligned(val) };
+        }
     }
 
     /// Read a u32 at the given offset.
