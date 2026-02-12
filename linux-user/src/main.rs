@@ -98,6 +98,7 @@ fn main() {
         tcg_linux_user::guest_space::page_align_up(info.brk) + 0x1000_0000; // 256 MB gap
 
     // Run
+    let show_stats = env::var("TCG_STATS").is_ok();
     let mut env = ExecEnv::new(X86_64CodeGen::new());
     loop {
         let reason = unsafe { cpu_exec_loop(&mut env, &mut lcpu) };
@@ -115,23 +116,38 @@ fn main() {
                         lcpu.cpu.pc += 4; // skip past ECALL
                     }
                     SyscallResult::Exit(code) => {
+                        if show_stats {
+                            eprint!("{}", env.stats);
+                        }
                         process::exit(code);
                     }
                 }
             }
             ExitReason::Exit(v) if v == EXCP_EBREAK as usize => {
+                if show_stats {
+                    eprint!("{}", env.stats);
+                }
                 eprintln!("ebreak at pc={:#x}", lcpu.cpu.pc);
                 process::exit(1);
             }
             ExitReason::Exit(v) if v == EXCP_UNDEF as usize => {
+                if show_stats {
+                    eprint!("{}", env.stats);
+                }
                 eprintln!("illegal instruction at pc={:#x}", lcpu.cpu.pc);
                 process::exit(1);
             }
             ExitReason::Exit(v) => {
+                if show_stats {
+                    eprint!("{}", env.stats);
+                }
                 eprintln!("unexpected exit {v}");
                 process::exit(1);
             }
             ExitReason::BufferFull => {
+                if show_stats {
+                    eprint!("{}", env.stats);
+                }
                 eprintln!("code buffer full");
                 process::exit(1);
             }
