@@ -191,6 +191,7 @@ impl RiscvDisasContext {
         self.gen_set_gpr_sx32(ir, a.rd, d32);
         true
     }
+
     // -- M-extension helpers (mul/div/rem) -----------------
 
     /// Signed division with RISC-V special-case handling.
@@ -362,7 +363,7 @@ impl RiscvDisasContext {
         ir.gen_brcond(Type::I64, src1, src2, cond, taken);
 
         // Not taken: PC = next insn
-        let next_pc = self.base.pc_next + 4;
+        let next_pc = self.base.pc_next + self.cur_insn_len as u64;
         let c = ir.new_const(Type::I64, next_pc);
         ir.gen_mov(Type::I64, self.pc, c);
         ir.gen_exit_tb(0);
@@ -399,7 +400,7 @@ impl Decode<Context> for RiscvDisasContext {
     // ── RV32I: Jumps ───────────────────────────────────
 
     fn trans_jal(&mut self, ir: &mut Context, a: &ArgsJ) -> bool {
-        let link = self.base.pc_next + 4;
+        let link = self.base.pc_next + self.cur_insn_len as u64;
         let c = ir.new_const(Type::I64, link);
         self.gen_set_gpr(ir, a.rd, c);
         let target = (self.base.pc_next as i64 + a.imm) as u64;
@@ -411,7 +412,7 @@ impl Decode<Context> for RiscvDisasContext {
     }
 
     fn trans_jalr(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
-        let link = self.base.pc_next + 4;
+        let link = self.base.pc_next + self.cur_insn_len as u64;
         let src = self.gpr_or_zero(ir, a.rs1);
         let imm = ir.new_const(Type::I64, a.imm as u64);
         let tmp = ir.new_temp(Type::I64);
@@ -693,5 +694,112 @@ impl Decode<Context> for RiscvDisasContext {
 
     fn trans_remuw(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
         self.gen_divu_remu_w(ir, a, true)
+    }
+}
+
+// ── Decode16 trait implementation (RVC) ───────────────────────
+//
+// Most compressed instructions map directly to their 32-bit
+// equivalents, so we delegate to the Decode impl.
+
+impl Decode16<Context> for RiscvDisasContext {
+    fn trans_illegal(&mut self, _ir: &mut Context, _a: &ArgsEmpty) -> bool {
+        false
+    }
+
+    fn trans_c64_illegal(&mut self, _ir: &mut Context, _a: &ArgsEmpty) -> bool {
+        false
+    }
+
+    fn trans_addi(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        <Self as Decode<Context>>::trans_addi(self, ir, a)
+    }
+
+    fn trans_lw(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        <Self as Decode<Context>>::trans_lw(self, ir, a)
+    }
+
+    fn trans_ld(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        <Self as Decode<Context>>::trans_ld(self, ir, a)
+    }
+
+    fn trans_sw(&mut self, ir: &mut Context, a: &ArgsS) -> bool {
+        <Self as Decode<Context>>::trans_sw(self, ir, a)
+    }
+
+    fn trans_sd(&mut self, ir: &mut Context, a: &ArgsS) -> bool {
+        <Self as Decode<Context>>::trans_sd(self, ir, a)
+    }
+
+    fn trans_lui(&mut self, ir: &mut Context, a: &ArgsU) -> bool {
+        <Self as Decode<Context>>::trans_lui(self, ir, a)
+    }
+
+    fn trans_srli(&mut self, ir: &mut Context, a: &ArgsShift) -> bool {
+        <Self as Decode<Context>>::trans_srli(self, ir, a)
+    }
+
+    fn trans_srai(&mut self, ir: &mut Context, a: &ArgsShift) -> bool {
+        <Self as Decode<Context>>::trans_srai(self, ir, a)
+    }
+
+    fn trans_andi(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        <Self as Decode<Context>>::trans_andi(self, ir, a)
+    }
+
+    fn trans_sub(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        <Self as Decode<Context>>::trans_sub(self, ir, a)
+    }
+
+    fn trans_xor(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        <Self as Decode<Context>>::trans_xor(self, ir, a)
+    }
+
+    fn trans_or(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        <Self as Decode<Context>>::trans_or(self, ir, a)
+    }
+
+    fn trans_and(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        <Self as Decode<Context>>::trans_and(self, ir, a)
+    }
+
+    fn trans_jal(&mut self, ir: &mut Context, a: &ArgsJ) -> bool {
+        <Self as Decode<Context>>::trans_jal(self, ir, a)
+    }
+
+    fn trans_beq(&mut self, ir: &mut Context, a: &ArgsB) -> bool {
+        <Self as Decode<Context>>::trans_beq(self, ir, a)
+    }
+
+    fn trans_bne(&mut self, ir: &mut Context, a: &ArgsB) -> bool {
+        <Self as Decode<Context>>::trans_bne(self, ir, a)
+    }
+
+    fn trans_addiw(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        <Self as Decode<Context>>::trans_addiw(self, ir, a)
+    }
+
+    fn trans_subw(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        <Self as Decode<Context>>::trans_subw(self, ir, a)
+    }
+
+    fn trans_addw(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        <Self as Decode<Context>>::trans_addw(self, ir, a)
+    }
+
+    fn trans_slli(&mut self, ir: &mut Context, a: &ArgsShift) -> bool {
+        <Self as Decode<Context>>::trans_slli(self, ir, a)
+    }
+
+    fn trans_jalr(&mut self, ir: &mut Context, a: &ArgsI) -> bool {
+        <Self as Decode<Context>>::trans_jalr(self, ir, a)
+    }
+
+    fn trans_ebreak(&mut self, ir: &mut Context, a: &ArgsEmpty) -> bool {
+        <Self as Decode<Context>>::trans_ebreak(self, ir, a)
+    }
+
+    fn trans_add(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        <Self as Decode<Context>>::trans_add(self, ir, a)
     }
 }

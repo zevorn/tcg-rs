@@ -53,6 +53,16 @@ impl RiscvDisasContext {
         }
     }
 
+    /// Fetch a 16-bit half-word at the current PC.
+    ///
+    /// # Safety
+    /// `guest_base + pc_next` must be a valid, readable
+    /// 2-byte host address.
+    unsafe fn fetch_insn16(&self) -> u16 {
+        let ptr = self.guest_base.add(self.base.pc_next as usize) as *const u16;
+        ptr.read_unaligned()
+    }
+
     /// Fetch a 32-bit instruction at the current PC.
     ///
     /// # Safety
@@ -98,13 +108,22 @@ impl TranslatorOps for RiscvTranslator {
     }
 
     fn translate_insn(ctx: &mut RiscvDisasContext, ir: &mut Context) {
-        // Fetch instruction (user-mode: direct host access).
-        let insn = unsafe { ctx.fetch_insn32() };
-        ctx.opcode = insn;
-        ctx.cur_insn_len = 4;
+        // Fetch 16-bit half-word to determine instruction length.
+        let half = unsafe { ctx.fetch_insn16() };
+        let decoded = if half & 0x3 != 0x3 {
+            // 16-bit compressed instruction
+            ctx.opcode = half as u32;
+            ctx.cur_insn_len = 2;
+            insn_decode::decode16(ctx, ir, half)
+        } else {
+            // 32-bit instruction
+            let insn = unsafe { ctx.fetch_insn32() };
+            ctx.opcode = insn;
+            ctx.cur_insn_len = 4;
+            insn_decode::decode(ctx, ir, insn)
+        };
 
-        // Dispatch through decodetree-generated decoder.
-        if !insn_decode::decode(ctx, ir, insn) {
+        if !decoded {
             // Unrecognized instruction — sync PC and exit
             // with SIGILL-like code.
             let pc_val = ctx.base.pc_next;
