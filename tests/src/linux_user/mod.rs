@@ -107,19 +107,15 @@ fn runner_bin() -> &'static Path {
             .arg("tcg-linux-user")
             .arg("--bin")
             .arg("tcg-riscv64")
+            .arg("--release")
             .arg("--quiet")
             .current_dir(workspace_root());
-        if !cfg!(debug_assertions) {
-            cmd.arg("--release");
-        }
         let status = cmd.status().expect("failed to build tcg-riscv64");
         assert!(status.success(), "cargo build tcg-riscv64 failed");
 
-        let profile =
-            if cfg!(debug_assertions) { "debug" } else { "release" };
         let mut bin = workspace_root()
             .join("target")
-            .join(profile)
+            .join("release")
             .join("tcg-riscv64");
         if cfg!(windows) {
             bin.set_extension("exe");
