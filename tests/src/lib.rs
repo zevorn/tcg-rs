@@ -3,6 +3,8 @@ mod backend;
 #[cfg(test)]
 mod core;
 #[cfg(test)]
+mod decodetree;
+#[cfg(test)]
 mod exec;
 #[cfg(test)]
 mod frontend;

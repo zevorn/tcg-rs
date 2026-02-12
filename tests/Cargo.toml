@@ -8,3 +8,4 @@ tcg-core = { path = "../core" }
 tcg-backend = { path = "../backend" }
 tcg-frontend = { path = "../frontend" }
 tcg-exec = { path = "../exec" }
+decodetree = { path = "../decodetree" }
