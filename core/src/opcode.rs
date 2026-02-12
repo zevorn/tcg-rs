@@ -894,9 +894,9 @@ pub static OPCODE_DEFS: [OpDef; Opcode::Count as usize] = [
     // Call
     OpDef {
         name: "call",
-        nb_oargs: 0,
-        nb_iargs: 0,
-        nb_cargs: 3,
+        nb_oargs: 1,
+        nb_iargs: 6,
+        nb_cargs: 2,
         flags: f(CC, NP),
     },
     // PluginCb

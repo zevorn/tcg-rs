@@ -946,6 +946,29 @@ impl Context {
         self.emit_op(op);
     }
 
+    /// Call helper: dst = helper(args[0..6])
+    /// Call: 1 oarg, 6 iargs, 2 cargs (func_lo, func_hi)
+    pub fn gen_call(
+        &mut self,
+        dst: TempIdx,
+        helper: u64,
+        args: &[TempIdx],
+    ) -> TempIdx {
+        let mut full_args = Vec::with_capacity(1 + 6 + 2);
+        full_args.push(dst);
+        let zero = self.new_const(Type::I64, 0);
+        for i in 0..6 {
+            let arg = args.get(i).copied().unwrap_or(zero);
+            full_args.push(arg);
+        }
+        full_args.push(carg(helper as u32));
+        full_args.push(carg((helper >> 32) as u32));
+        let idx = self.next_op_idx();
+        let op = Op::with_args(idx, Opcode::Call, Type::I64, &full_args);
+        self.emit_op(op);
+        dst
+    }
+
     pub fn gen_discard(&mut self, ty: Type, t: TempIdx) {
         let idx = self.next_op_idx();
         let op = Op::with_args(idx, Opcode::Discard, ty, &[t]);

@@ -322,7 +322,7 @@ fn opcode_def_full_coverage() {
     assert_group(&mut seen, &[Opcode::GotoPtr], 0, 1, 0, bx_be);
     assert_group(&mut seen, &[Opcode::Mb, Opcode::PluginCb], 0, 0, 1, np);
 
-    assert_group(&mut seen, &[Opcode::Call], 0, 0, 3, cc_np);
+    assert_group(&mut seen, &[Opcode::Call], 1, 6, 2, cc_np);
     assert_group(&mut seen, &[Opcode::PluginMemCb], 0, 1, 1, np);
     assert_group(&mut seen, &[Opcode::Nop], 0, 0, 0, np);
     assert_group(&mut seen, &[Opcode::Discard], 1, 0, 0, np);
