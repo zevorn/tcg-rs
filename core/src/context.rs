@@ -30,6 +30,8 @@ pub struct Context {
     pub frame_start: i64,
     /// End offset (next free byte) of the spill area.
     pub frame_end: i64,
+    /// Next free byte in the spill area (grows from frame_start).
+    pub frame_alloc_end: i64,
 
     // -- Register allocation state --
     /// Registers reserved by the backend (not available for allocation).
@@ -56,6 +58,7 @@ impl Context {
             frame_reg: None,
             frame_start: 0,
             frame_end: 0,
+            frame_alloc_end: 0,
             reserved_regs: RegSet::EMPTY,
             const_table: Default::default(),
             gen_insn_end_off: Vec::with_capacity(MAX_INSNS),
@@ -88,6 +91,7 @@ impl Context {
             table.clear();
         }
         self.gen_insn_end_off.clear();
+        self.frame_alloc_end = self.frame_start;
     }
 
     // -- Temp allocation --
@@ -239,6 +243,29 @@ impl Context {
         self.frame_reg = Some(reg);
         self.frame_start = start;
         self.frame_end = start + size;
+        self.frame_alloc_end = start;
+    }
+
+    /// Allocate a stack slot for a local temp that needs spilling.
+    /// Returns the offset from frame_reg.
+    pub fn alloc_temp_frame(&mut self, tidx: TempIdx) -> i64 {
+        let t = self.temp(tidx);
+        if t.mem_allocated {
+            return t.mem_offset;
+        }
+        let size = t.ty.size_bytes() as i64;
+        // Align to natural size
+        self.frame_alloc_end = (self.frame_alloc_end + size - 1) & !(size - 1);
+        let offset = self.frame_alloc_end;
+        self.frame_alloc_end += size;
+        assert!(
+            self.frame_alloc_end <= self.frame_end,
+            "spill area overflow"
+        );
+        let t = self.temp_mut(tidx);
+        t.mem_allocated = true;
+        t.mem_offset = offset;
+        offset
     }
 }
 
