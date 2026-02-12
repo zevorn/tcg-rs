@@ -9,24 +9,34 @@
 
 CROSS_COMPILE ?= riscv64-linux-gnu-
 CC       = $(CROSS_COMPILE)gcc
-CFLAGS   = -static -nostdlib -march=rv64im -mabi=lp64 -O2
 BUILDDIR = build/riscv64
+
+# Bare-metal programs (no libc, custom _start).
+BARE_CFLAGS = -static -nostdlib -march=rv64im -mabi=lp64 -O2
+BARE_SRCS   = riscv/hello.c
+
+# Programs linked with static glibc.
+LIBC_CFLAGS = -static -march=rv64gc -mabi=lp64d -O2
+LIBC_SRCS   = riscv/hello_printf.c
+
+BARE_BINS = $(patsubst riscv/%.c,$(BUILDDIR)/%,$(BARE_SRCS))
+LIBC_BINS = $(patsubst riscv/%.c,$(BUILDDIR)/%,$(LIBC_SRCS))
 
 HAS_CC := $(shell command -v $(CC) 2>/dev/null)
 
-SRCS = $(wildcard riscv/*.c)
-BINS = $(patsubst riscv/%.c,$(BUILDDIR)/%,$(SRCS))
-
 ifdef HAS_CC
-all: $(BINS)
+all: $(BARE_BINS) $(LIBC_BINS)
 else
 all:
 	@echo "SKIP: $(CC) not found, install with:"
 	@echo "  apt install gcc-riscv64-linux-gnu"
 endif
 
-$(BUILDDIR)/%: riscv/%.c | $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $@ $<
+$(BARE_BINS): $(BUILDDIR)/%: riscv/%.c | $(BUILDDIR)
+	$(CC) $(BARE_CFLAGS) -o $@ $<
+
+$(LIBC_BINS): $(BUILDDIR)/%: riscv/%.c | $(BUILDDIR)
+	$(CC) $(LIBC_CFLAGS) -o $@ $<
 
 $(BUILDDIR):
 	mkdir -p $@
