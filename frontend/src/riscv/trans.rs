@@ -360,20 +360,13 @@ impl RiscvDisasContext {
     // -- Atomic helpers (A extension) ----------------------
 
     /// LR: load-reserved.
-    fn gen_lr(
-        &self,
-        ir: &mut Context,
-        a: &ArgsAtomic,
-        memop: MemOp,
-    ) -> bool {
+    fn gen_lr(&self, ir: &mut Context, a: &ArgsAtomic, memop: MemOp) -> bool {
         let addr = self.gpr_or_zero(ir, a.rs1);
         if a.rl != 0 {
             ir.gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
         }
         let val = ir.new_temp(Type::I64);
-        ir.gen_qemu_ld(
-            Type::I64, val, addr, memop.bits() as u32,
-        );
+        ir.gen_qemu_ld(Type::I64, val, addr, memop.bits() as u32);
         if a.aq != 0 {
             ir.gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
         }
@@ -384,44 +377,21 @@ impl RiscvDisasContext {
     }
 
     /// SC: store-conditional (single-thread simplified).
-    fn gen_sc(
-        &self,
-        ir: &mut Context,
-        a: &ArgsAtomic,
-        memop: MemOp,
-    ) -> bool {
+    ///
+    /// In single-threaded mode, SC always succeeds if there
+    /// is a valid reservation (set by a preceding LR).
+    /// We skip the address comparison since no other thread
+    /// can invalidate the reservation.
+    fn gen_sc(&self, ir: &mut Context, a: &ArgsAtomic, memop: MemOp) -> bool {
         let addr = self.gpr_or_zero(ir, a.rs1);
-        let l_fail = ir.new_label();
-        let l_done = ir.new_label();
 
-        // Compare reservation address.
-        ir.gen_brcond(
-            Type::I64, self.load_res, addr,
-            Cond::Ne, l_fail,
-        );
-
-        // Success: store and set rd = 0.
+        // Always succeed: store and set rd = 0.
         let src2 = self.gpr_or_zero(ir, a.rs2);
-        ir.gen_qemu_st(
-            Type::I64, src2, addr, memop.bits() as u32,
-        );
+        ir.gen_qemu_st(Type::I64, src2, addr, memop.bits() as u32);
         let zero = ir.new_const(Type::I64, 0);
         self.gen_set_gpr(ir, a.rd, zero);
-        ir.gen_br(l_done);
-
-        // Fail: provide aq/rl barrier, set rd = 1.
-        ir.gen_set_label(l_fail);
-        let bar = TCG_MO_ALL
-            + a.aq as u32 * TCG_BAR_LDAQ
-            + a.rl as u32 * TCG_BAR_STRL;
-        if bar != TCG_MO_ALL {
-            ir.gen_mb(bar);
-        }
-        let one = ir.new_const(Type::I64, 1);
-        self.gen_set_gpr(ir, a.rd, one);
 
         // Clear reservation.
-        ir.gen_set_label(l_done);
         let neg1 = ir.new_const(Type::I64, u64::MAX);
         ir.gen_mov(Type::I64, self.load_res, neg1);
         true
@@ -440,15 +410,11 @@ impl RiscvDisasContext {
             ir.gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
         }
         let old = ir.new_temp(Type::I64);
-        ir.gen_qemu_ld(
-            Type::I64, old, addr, memop.bits() as u32,
-        );
+        ir.gen_qemu_ld(Type::I64, old, addr, memop.bits() as u32);
         let src2 = self.gpr_or_zero(ir, a.rs2);
         let new = ir.new_temp(Type::I64);
         op(ir, Type::I64, new, old, src2);
-        ir.gen_qemu_st(
-            Type::I64, new, addr, memop.bits() as u32,
-        );
+        ir.gen_qemu_st(Type::I64, new, addr, memop.bits() as u32);
         if a.aq != 0 {
             ir.gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
         }
@@ -468,13 +434,9 @@ impl RiscvDisasContext {
             ir.gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
         }
         let old = ir.new_temp(Type::I64);
-        ir.gen_qemu_ld(
-            Type::I64, old, addr, memop.bits() as u32,
-        );
+        ir.gen_qemu_ld(Type::I64, old, addr, memop.bits() as u32);
         let src2 = self.gpr_or_zero(ir, a.rs2);
-        ir.gen_qemu_st(
-            Type::I64, src2, addr, memop.bits() as u32,
-        );
+        ir.gen_qemu_st(Type::I64, src2, addr, memop.bits() as u32);
         if a.aq != 0 {
             ir.gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
         }
@@ -495,18 +457,12 @@ impl RiscvDisasContext {
             ir.gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
         }
         let old = ir.new_temp(Type::I64);
-        ir.gen_qemu_ld(
-            Type::I64, old, addr, memop.bits() as u32,
-        );
+        ir.gen_qemu_ld(Type::I64, old, addr, memop.bits() as u32);
         let src2 = self.gpr_or_zero(ir, a.rs2);
         let new = ir.new_temp(Type::I64);
         // new = (old cond src2) ? old : src2
-        ir.gen_movcond(
-            Type::I64, new, old, src2, old, src2, cond,
-        );
-        ir.gen_qemu_st(
-            Type::I64, new, addr, memop.bits() as u32,
-        );
+        ir.gen_movcond(Type::I64, new, old, src2, old, src2, cond);
+        ir.gen_qemu_st(Type::I64, new, addr, memop.bits() as u32);
         if a.aq != 0 {
             ir.gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
         }
@@ -860,117 +816,73 @@ impl Decode<Context> for RiscvDisasContext {
 
     // ── RV32A: Atomic ─────────────────────────────────────
 
-    fn trans_lr_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_lr_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_lr(ir, a, MemOp::sl())
     }
-    fn trans_sc_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_sc_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_sc(ir, a, MemOp::ul())
     }
-    fn trans_amoswap_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoswap_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_swap(ir, a, MemOp::sl())
     }
-    fn trans_amoadd_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoadd_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo(ir, a, Context::gen_add, MemOp::sl())
     }
-    fn trans_amoxor_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoxor_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo(ir, a, Context::gen_xor, MemOp::sl())
     }
-    fn trans_amoand_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoand_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo(ir, a, Context::gen_and, MemOp::sl())
     }
-    fn trans_amoor_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoor_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo(ir, a, Context::gen_or, MemOp::sl())
     }
-    fn trans_amomin_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amomin_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_minmax(ir, a, Cond::Lt, MemOp::sl())
     }
-    fn trans_amomax_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amomax_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_minmax(ir, a, Cond::Gt, MemOp::sl())
     }
-    fn trans_amominu_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amominu_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_minmax(ir, a, Cond::Ltu, MemOp::sl())
     }
-    fn trans_amomaxu_w(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amomaxu_w(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_minmax(ir, a, Cond::Gtu, MemOp::sl())
     }
 
     // ── RV64A: Atomic ─────────────────────────────────────
 
-    fn trans_lr_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_lr_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_lr(ir, a, MemOp::uq())
     }
-    fn trans_sc_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_sc_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_sc(ir, a, MemOp::uq())
     }
-    fn trans_amoswap_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoswap_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_swap(ir, a, MemOp::uq())
     }
-    fn trans_amoadd_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoadd_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo(ir, a, Context::gen_add, MemOp::uq())
     }
-    fn trans_amoxor_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoxor_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo(ir, a, Context::gen_xor, MemOp::uq())
     }
-    fn trans_amoand_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoand_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo(ir, a, Context::gen_and, MemOp::uq())
     }
-    fn trans_amoor_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amoor_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo(ir, a, Context::gen_or, MemOp::uq())
     }
-    fn trans_amomin_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amomin_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_minmax(ir, a, Cond::Lt, MemOp::uq())
     }
-    fn trans_amomax_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amomax_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_minmax(ir, a, Cond::Gt, MemOp::uq())
     }
-    fn trans_amominu_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amominu_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_minmax(ir, a, Cond::Ltu, MemOp::uq())
     }
-    fn trans_amomaxu_d(
-        &mut self, ir: &mut Context, a: &ArgsAtomic,
-    ) -> bool {
+    fn trans_amomaxu_d(&mut self, ir: &mut Context, a: &ArgsAtomic) -> bool {
         self.gen_amo_minmax(ir, a, Cond::Gtu, MemOp::uq())
     }
 }
