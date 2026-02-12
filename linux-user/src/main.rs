@@ -73,7 +73,9 @@ fn main() {
         process::exit(1);
     }
 
-    let elf_path = &args[1];
+    let elf_path = std::fs::canonicalize(&args[1])
+        .expect("failed to resolve elf path");
+    let elf_path = elf_path.to_str().unwrap();
     let guest_argv: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
 
     // Load ELF
@@ -105,6 +107,7 @@ fn main() {
                     &mut space,
                     &mut lcpu.cpu.gpr,
                     &mut mmap_next,
+                    elf_path,
                 ) {
                     SyscallResult::Continue(ret) => {
                         lcpu.cpu.gpr[10] = ret;
