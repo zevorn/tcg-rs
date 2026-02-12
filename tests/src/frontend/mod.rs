@@ -754,3 +754,388 @@ fn test_lui_addi_combo() {
     );
     assert_eq!(cpu.gpr[1], 0x12345678);
 }
+
+// ── RVC encoding helpers ─────────────────────────────────────
+
+#[allow(dead_code)]
+fn rv_ci(f3: u32, imm5: u32, rd: u32, imm4_0: u32, op: u32) -> u16 {
+    ((f3 & 0x7) << 13
+        | (imm5 & 1) << 12
+        | (rd & 0x1f) << 7
+        | (imm4_0 & 0x1f) << 2
+        | (op & 0x3)) as u16
+}
+
+#[allow(dead_code)]
+fn rv_cr(f4: u32, rd: u32, rs2: u32, op: u32) -> u16 {
+    ((f4 & 0xf) << 12 | (rd & 0x1f) << 7 | (rs2 & 0x1f) << 2 | (op & 0x3))
+        as u16
+}
+
+#[allow(dead_code)]
+fn rv_css(f3: u32, imm: u32, rs2: u32, op: u32) -> u16 {
+    ((f3 & 0x7) << 13 | (imm & 0x3f) << 7 | (rs2 & 0x1f) << 2 | (op & 0x3))
+        as u16
+}
+
+#[allow(dead_code)]
+fn rv_ciw(f3: u32, imm: u32, rdp: u32, op: u32) -> u16 {
+    ((f3 & 0x7) << 13 | (imm & 0xff) << 5 | (rdp & 0x7) << 2 | (op & 0x3))
+        as u16
+}
+
+#[allow(dead_code)]
+fn rv_cl(
+    f3: u32,
+    imm_hi: u32,
+    rs1p: u32,
+    imm_lo: u32,
+    rdp: u32,
+    op: u32,
+) -> u16 {
+    ((f3 & 0x7) << 13
+        | (imm_hi & 0x7) << 10
+        | (rs1p & 0x7) << 7
+        | (imm_lo & 0x3) << 5
+        | (rdp & 0x7) << 2
+        | (op & 0x3)) as u16
+}
+
+#[allow(dead_code)]
+fn rv_cs(
+    f3: u32,
+    imm_hi: u32,
+    rs1p: u32,
+    imm_lo: u32,
+    rs2p: u32,
+    op: u32,
+) -> u16 {
+    rv_cl(f3, imm_hi, rs1p, imm_lo, rs2p, op)
+}
+
+#[allow(dead_code)]
+fn rv_cb(f3: u32, off_hi: u32, rs1p: u32, off_lo: u32, op: u32) -> u16 {
+    ((f3 & 0x7) << 13
+        | (off_hi & 0x7) << 10
+        | (rs1p & 0x7) << 7
+        | (off_lo & 0x1f) << 2
+        | (op & 0x3)) as u16
+}
+
+#[allow(dead_code)]
+fn rv_cj(f3: u32, target: u32, op: u32) -> u16 {
+    ((f3 & 0x7) << 13 | (target & 0x7ff) << 2 | (op & 0x3)) as u16
+}
+
+// Specific RVC instruction encoders
+
+/// C.LI rd, imm → addi rd, x0, sext(imm)
+fn c_li(rd: u32, imm: i32) -> u16 {
+    let imm = imm as u32;
+    rv_ci(0b010, (imm >> 5) & 1, rd, imm & 0x1f, 0b01)
+}
+
+/// C.ADDI rd, nzimm → addi rd, rd, sext(nzimm)
+fn c_addi(rd: u32, nzimm: i32) -> u16 {
+    let nzimm = nzimm as u32;
+    rv_ci(0b000, (nzimm >> 5) & 1, rd, nzimm & 0x1f, 0b01)
+}
+
+/// C.LUI rd, nzimm → lui rd, sext(nzimm<<12)
+fn c_lui(rd: u32, nzimm: i32) -> u16 {
+    // nzimm is the value >> 12
+    let nzimm = nzimm as u32;
+    rv_ci(0b011, (nzimm >> 5) & 1, rd, nzimm & 0x1f, 0b01)
+}
+
+/// C.MV rd, rs2 → add rd, x0, rs2
+fn c_mv(rd: u32, rs2: u32) -> u16 {
+    rv_cr(0b1000, rd, rs2, 0b10)
+}
+
+/// C.ADD rd, rs2 → add rd, rd, rs2
+fn c_add(rd: u32, rs2: u32) -> u16 {
+    rv_cr(0b1001, rd, rs2, 0b10)
+}
+
+/// C.SUB rd', rs2' → sub rd'+8, rd'+8, rs2'+8
+fn c_sub(rdp: u32, rs2p: u32) -> u16 {
+    // 100 0 11 rd' 00 rs2' 01
+    ((0b100 << 13)
+        | (0 << 12)
+        | (0b11 << 10)
+        | ((rdp & 0x7) << 7)
+        | (0b00 << 5)
+        | ((rs2p & 0x7) << 2)
+        | 0b01) as u16
+}
+
+/// C.SLLI rd, shamt → slli rd, rd, shamt
+fn c_slli(rd: u32, shamt: u32) -> u16 {
+    rv_ci(0b000, (shamt >> 5) & 1, rd, shamt & 0x1f, 0b10)
+}
+
+/// C.ADDI4SPN rd', nzuimm → addi rd'+8, x2, nzuimm
+/// nzuimm encoding: bits[5:4|9:6|2|3] in imm[12:5]
+fn c_addi4spn(rdp: u32, nzuimm: u32) -> u16 {
+    // Encode nzuimm into the CIW format bits
+    let b5_4 = (nzuimm >> 4) & 0x3;
+    let b9_6 = (nzuimm >> 6) & 0xf;
+    let b2 = (nzuimm >> 2) & 0x1;
+    let b3 = (nzuimm >> 3) & 0x1;
+    let imm8 = (b5_4 << 6) | (b9_6 << 2) | (b3 << 1) | b2;
+    rv_ciw(0b000, imm8, rdp, 0b00)
+}
+
+/// C.ADDIW rd, imm → addiw rd, rd, sext(imm)
+fn c_addiw(rd: u32, imm: i32) -> u16 {
+    let imm = imm as u32;
+    rv_ci(0b001, (imm >> 5) & 1, rd, imm & 0x1f, 0b01)
+}
+
+/// C.J offset → jal x0, offset
+fn c_j(offset: i32) -> u16 {
+    // CJ target encoding: [11|4|9:8|10|6|7|3:1|5]
+    let o = offset as u32;
+    let b11 = (o >> 11) & 1;
+    let b4 = (o >> 4) & 1;
+    let b9_8 = (o >> 8) & 0x3;
+    let b10 = (o >> 10) & 1;
+    let b6 = (o >> 6) & 1;
+    let b7 = (o >> 7) & 1;
+    let b3_1 = (o >> 1) & 0x7;
+    let b5 = (o >> 5) & 1;
+    let target = (b11 << 10)
+        | (b4 << 9)
+        | (b9_8 << 7)
+        | (b10 << 6)
+        | (b6 << 5)
+        | (b7 << 4)
+        | (b3_1 << 1)
+        | b5;
+    rv_cj(0b101, target, 0b01)
+}
+
+/// C.BEQZ rs1', offset → beq rs1'+8, x0, offset
+fn c_beqz(rs1p: u32, offset: i32) -> u16 {
+    let o = offset as u32;
+    let b8 = (o >> 8) & 1;
+    let b4_3 = (o >> 3) & 0x3;
+    let off_hi = (b8 << 2) | b4_3;
+    let b7_6 = (o >> 6) & 0x3;
+    let b2_1 = (o >> 1) & 0x3;
+    let b5 = (o >> 5) & 1;
+    let off_lo = (b7_6 << 3) | (b2_1 << 1) | b5;
+    rv_cb(0b110, off_hi, rs1p, off_lo, 0b01)
+}
+
+/// C.BNEZ rs1', offset → bne rs1'+8, x0, offset
+fn c_bnez(rs1p: u32, offset: i32) -> u16 {
+    let o = offset as u32;
+    let b8 = (o >> 8) & 1;
+    let b4_3 = (o >> 3) & 0x3;
+    let off_hi = (b8 << 2) | b4_3;
+    let b7_6 = (o >> 6) & 0x3;
+    let b2_1 = (o >> 1) & 0x3;
+    let b5 = (o >> 5) & 1;
+    let off_lo = (b7_6 << 3) | (b2_1 << 1) | b5;
+    rv_cb(0b111, off_hi, rs1p, off_lo, 0b01)
+}
+
+/// C.EBREAK → ebreak
+fn c_ebreak() -> u16 {
+    rv_cr(0b1001, 0, 0, 0b10)
+}
+
+// ── Byte-level test runner ───────────────────────────────────
+
+/// Count instructions in a raw byte stream (mixed 16/32-bit).
+fn count_insns(code: &[u8]) -> u32 {
+    let mut count = 0u32;
+    let mut off = 0;
+    while off + 1 < code.len() {
+        let half = u16::from_le_bytes([code[off], code[off + 1]]);
+        if half & 0x3 != 0x3 {
+            off += 2;
+        } else {
+            off += 4;
+        }
+        count += 1;
+    }
+    count
+}
+
+/// Translate and execute a raw byte stream of RISC-V
+/// instructions (supports mixed 16/32-bit).
+fn run_rv_bytes(cpu: &mut RiscvCpu, code: &[u8]) -> usize {
+    let guest_base = code.as_ptr();
+
+    let mut backend = X86_64CodeGen::new();
+    let mut buf = CodeBuffer::new(4096).unwrap();
+    backend.emit_prologue(&mut buf);
+    backend.emit_epilogue(&mut buf);
+
+    let mut ctx = Context::new();
+    backend.init_context(&mut ctx);
+
+    let n = count_insns(code);
+    let mut disas = RiscvDisasContext::new(0, guest_base);
+    disas.base.max_insns = n;
+    translator_loop::<RiscvTranslator>(&mut disas, &mut ctx);
+
+    unsafe {
+        translate_and_execute(
+            &mut ctx,
+            &backend,
+            &mut buf,
+            cpu as *mut RiscvCpu as *mut u8,
+        )
+    }
+}
+
+/// Helper: run a single 16-bit instruction.
+fn run_rvc(cpu: &mut RiscvCpu, insn: u16) -> usize {
+    let code = insn.to_le_bytes();
+    run_rv_bytes(cpu, &code)
+}
+
+// ── RVC execution tests ──────────────────────────────────────
+
+#[test]
+fn test_c_li() {
+    let mut cpu = RiscvCpu::new();
+    run_rvc(&mut cpu, c_li(1, 15));
+    assert_eq!(cpu.gpr[1], 15);
+}
+
+#[test]
+fn test_c_addi() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[1] = 100;
+    run_rvc(&mut cpu, c_addi(1, 5));
+    assert_eq!(cpu.gpr[1], 105);
+}
+
+#[test]
+fn test_c_lui() {
+    let mut cpu = RiscvCpu::new();
+    // C.LUI x3, 2 → x3 = 2 << 12 = 0x2000
+    run_rvc(&mut cpu, c_lui(3, 2));
+    assert_eq!(cpu.gpr[3], 0x2000);
+}
+
+#[test]
+fn test_c_mv() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[2] = 0xDEAD;
+    run_rvc(&mut cpu, c_mv(1, 2));
+    assert_eq!(cpu.gpr[1], 0xDEAD);
+}
+
+#[test]
+fn test_c_add() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[1] = 100;
+    cpu.gpr[2] = 200;
+    run_rvc(&mut cpu, c_add(1, 2));
+    assert_eq!(cpu.gpr[1], 300);
+}
+
+#[test]
+fn test_c_sub() {
+    let mut cpu = RiscvCpu::new();
+    // rd' = 0 → x8, rs2' = 1 → x9
+    cpu.gpr[8] = 100;
+    cpu.gpr[9] = 30;
+    run_rvc(&mut cpu, c_sub(0, 1));
+    assert_eq!(cpu.gpr[8], 70);
+}
+
+#[test]
+fn test_c_slli() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[1] = 1;
+    run_rvc(&mut cpu, c_slli(1, 8));
+    assert_eq!(cpu.gpr[1], 256);
+}
+
+#[test]
+fn test_c_addi4spn() {
+    let mut cpu = RiscvCpu::new();
+    // x2 (sp) = 0x1000, nzuimm = 16
+    cpu.gpr[2] = 0x1000;
+    run_rvc(&mut cpu, c_addi4spn(0, 16)); // rd' = 0 → x8
+    assert_eq!(cpu.gpr[8], 0x1010);
+}
+
+#[test]
+fn test_c_addiw() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[1] = 0x7FFF_FFFF;
+    run_rvc(&mut cpu, c_addiw(1, 1));
+    // 0x7FFF_FFFF + 1 = 0x8000_0000 → sext32
+    assert_eq!(cpu.gpr[1], 0xFFFF_FFFF_8000_0000u64);
+}
+
+#[test]
+fn test_c_j() {
+    let mut cpu = RiscvCpu::new();
+    // C.J +8 → PC = 0 + 8 = 8
+    run_rvc(&mut cpu, c_j(8));
+    assert_eq!(cpu.pc, 8);
+}
+
+#[test]
+fn test_c_beqz_taken() {
+    let mut cpu = RiscvCpu::new();
+    // rs1' = 0 → x8, x8 = 0 → branch taken
+    cpu.gpr[8] = 0;
+    run_rvc(&mut cpu, c_beqz(0, 8));
+    assert_eq!(cpu.pc, 8);
+}
+
+#[test]
+fn test_c_beqz_not_taken() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[8] = 1;
+    run_rvc(&mut cpu, c_beqz(0, 8));
+    assert_eq!(cpu.pc, 2); // PC + 2 (16-bit insn)
+}
+
+#[test]
+fn test_c_bnez_taken() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[8] = 1;
+    run_rvc(&mut cpu, c_bnez(0, 8));
+    assert_eq!(cpu.pc, 8);
+}
+
+#[test]
+fn test_c_bnez_not_taken() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[8] = 0;
+    run_rvc(&mut cpu, c_bnez(0, 8));
+    assert_eq!(cpu.pc, 2);
+}
+
+#[test]
+fn test_c_ebreak() {
+    let mut cpu = RiscvCpu::new();
+    let exit = run_rvc(&mut cpu, c_ebreak());
+    assert_eq!(exit, 2);
+}
+
+// ── Mixed 32/16-bit sequence ─────────────────────────────────
+
+#[test]
+fn test_mixed_32_16() {
+    let mut cpu = RiscvCpu::new();
+    // addi x1, x0, 10 (32-bit) + C.ADDI x1, 5 (16-bit)
+    let insn32 = addi(1, 0, 10);
+    let insn16 = c_addi(1, 5);
+    let mut code = Vec::new();
+    code.extend_from_slice(&insn32.to_le_bytes());
+    code.extend_from_slice(&insn16.to_le_bytes());
+    run_rv_bytes(&mut cpu, &code);
+    assert_eq!(cpu.gpr[1], 15);
+}
