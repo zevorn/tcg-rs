@@ -5,7 +5,7 @@ use crate::{
 };
 use tcg_backend::translate::translate;
 use tcg_backend::HostCodeGen;
-use tcg_core::tb::{decode_tb_exit, TB_EXIT_NOCHAIN};
+use tcg_core::tb::{decode_tb_exit, EXIT_TARGET_NONE, TB_EXIT_NOCHAIN};
 
 /// Reason the execution loop exited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,19 +93,16 @@ where
                 let pc = cpu.get_pc();
                 let flags = cpu.get_flags();
 
-                // Check exit_target cache.
+                // Check exit_target cache (lock-free atomic).
                 let stb = shared.tb_store.get(src_tb);
-                let cached = {
-                    let jmp = stb.jmp.lock().unwrap();
-                    jmp.exit_target
-                };
-                if let Some(dst) = cached {
-                    let tb = shared.tb_store.get(dst);
+                let cached = stb.exit_target.load(Ordering::Relaxed);
+                if cached != EXIT_TARGET_NONE {
+                    let tb = shared.tb_store.get(cached);
                     if !tb.invalid.load(Ordering::Acquire)
                         && tb.pc == pc
                         && tb.flags == flags
                     {
-                        next_tb_hint = Some(dst);
+                        next_tb_hint = Some(cached);
                         continue;
                     }
                 }
@@ -115,8 +112,7 @@ where
                     None => return ExitReason::BufferFull,
                 };
                 let stb = shared.tb_store.get(src_tb);
-                let mut jmp = stb.jmp.lock().unwrap();
-                jmp.exit_target = Some(dst);
+                stb.exit_target.store(dst, Ordering::Relaxed);
                 next_tb_hint = Some(dst);
             }
             _ => {

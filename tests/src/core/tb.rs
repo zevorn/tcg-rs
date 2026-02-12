@@ -11,8 +11,11 @@ fn tb_new() {
     let jmp = tb.jmp.lock().unwrap();
     assert_eq!(jmp.jmp_dest, [None, None]);
     assert!(jmp.jmp_list.is_empty());
-    assert_eq!(jmp.exit_target, None);
     drop(jmp);
+    assert_eq!(
+        tb.exit_target.load(std::sync::atomic::Ordering::Relaxed),
+        EXIT_TARGET_NONE
+    );
     assert_eq!(tb.hash_next, None);
 }
 

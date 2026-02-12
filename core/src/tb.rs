@@ -1,5 +1,8 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
+
+/// Sentinel value for "no exit target cached".
+pub const EXIT_TARGET_NONE: usize = usize::MAX;
 
 /// Mutable chaining state protected by per-TB lock.
 pub struct TbJmpState {
@@ -7,8 +10,6 @@ pub struct TbJmpState {
     pub jmp_dest: [Option<usize>; 2],
     /// Incoming edges: (source_tb_idx, slot) pairs.
     pub jmp_list: Vec<(usize, usize)>,
-    /// Single-entry target cache for indirect exits.
-    pub exit_target: Option<usize>,
 }
 
 impl TbJmpState {
@@ -16,7 +17,6 @@ impl TbJmpState {
         Self {
             jmp_dest: [None; 2],
             jmp_list: Vec::new(),
-            exit_target: None,
         }
     }
 }
@@ -51,6 +51,9 @@ pub struct TranslationBlock {
 
     // -- Atomic --
     pub invalid: AtomicBool,
+    /// Single-entry target cache for indirect exits (atomic,
+    /// lock-free). EXIT_TARGET_NONE means no cached target.
+    pub exit_target: AtomicUsize,
 }
 
 /// Compile flags for TranslationBlock.cflags.
@@ -95,6 +98,7 @@ impl TranslationBlock {
             hash_next: None,
             jmp: Mutex::new(TbJmpState::new()),
             invalid: AtomicBool::new(false),
+            exit_target: AtomicUsize::new(EXIT_TARGET_NONE),
         }
     }
 
