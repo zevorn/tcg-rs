@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 tcg-core = { path = "../core" }
+libc = "0.2"
 
 [build-dependencies]
 decodetree = { path = "../decodetree" }

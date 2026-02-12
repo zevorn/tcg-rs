@@ -3,6 +3,7 @@
 pub mod cpu;
 #[allow(dead_code)]
 mod insn_decode;
+mod fpu;
 mod trans;
 
 use crate::{DisasContextBase, DisasJumpType, TranslatorOps};
@@ -136,25 +137,11 @@ impl TranslatorOps for RiscvTranslator {
         };
 
         if !decoded {
-            // Check for FP instructions — skip as NOP
-            // in integer-only mode.
-            let is_fp = if ctx.cur_insn_len == 4 {
-                // 32-bit FP opcodes
-                let op7 = ctx.opcode & 0x7f;
-                matches!(op7, 0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53)
-            } else {
-                // 16-bit compressed FP: c.fld/c.fsd
-                let f3 = (ctx.opcode >> 13) & 0x7;
-                let q = ctx.opcode & 0x3;
-                matches!((f3, q), (1, 0) | (5, 0) | (1, 2) | (5, 2))
-            };
-            if !is_fp {
-                let pc_val = ctx.base.pc_next;
-                let pc_const = ir.new_const(Type::I64, pc_val);
-                ir.gen_mov(Type::I64, ctx.pc, pc_const);
-                ir.gen_exit_tb(3);
-                ctx.base.is_jmp = DisasJumpType::NoReturn;
-            }
+            let pc_val = ctx.base.pc_next;
+            let pc_const = ir.new_const(Type::I64, pc_val);
+            ir.gen_mov(Type::I64, ctx.pc, pc_const);
+            ir.gen_exit_tb(3);
+            ctx.base.is_jmp = DisasJumpType::NoReturn;
         }
 
         ctx.base.pc_next += ctx.cur_insn_len as u64;
