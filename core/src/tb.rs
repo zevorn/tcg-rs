@@ -35,6 +35,11 @@ pub struct TranslationBlock {
     /// `None` = not yet linked (jump still targets the epilogue).
     pub jmp_dest: [Option<usize>; 2],
 
+    /// Cached cycle detection: if `chain_reachable` returned true
+    /// for this slot, skip the DFS on subsequent iterations and
+    /// use `jmp_dest[slot]` as a direct hint instead.
+    pub jmp_nochain: [bool; 2],
+
     /// Incoming edges: list of (source_tb_idx, slot) pairs.
     /// Records which TBs have their goto_tb patched to jump here.
     pub jmp_list: Vec<(usize, usize)>,
@@ -81,6 +86,7 @@ impl TranslationBlock {
             jmp_insn_offset: [None; 2],
             jmp_reset_offset: [None; 2],
             jmp_dest: [None; 2],
+            jmp_nochain: [false; 2],
             jmp_list: Vec::new(),
             exit_target: None,
             phys_pc: 0,

@@ -53,16 +53,37 @@ where
             v @ 0..=1 => {
                 let slot = v;
                 env.stats.chain_exit[slot] += 1;
+
+                // Opt 2: cached cycle — reuse destination
+                // as hint, skip tb_find + chain_reachable.
+                let stb = env.tb_store.get(src_tb);
+                if stb.jmp_nochain[slot] {
+                    if let Some(dst) = stb.jmp_dest[slot] {
+                        let dtb = env.tb_store.get(dst);
+                        let pc = cpu.get_pc();
+                        let flags = cpu.get_flags();
+                        if !dtb.invalid && dtb.pc == pc && dtb.flags == flags {
+                            next_tb_hint = Some(dst);
+                            continue;
+                        }
+                    }
+                }
+
                 let pc = cpu.get_pc();
                 let flags = cpu.get_flags();
                 let dst = match tb_find(env, cpu, pc, flags) {
                     Some(idx) => idx,
                     None => return ExitReason::BufferFull,
                 };
+
                 if !chain_reachable(&env.tb_store, dst, src_tb) {
                     tb_add_jump(env, src_tb, slot, dst);
                 } else {
+                    // Opt 1: cache cycle result
                     env.stats.chain_cycle += 1;
+                    let stb = env.tb_store.get_mut(src_tb);
+                    stb.jmp_nochain[slot] = true;
+                    stb.jmp_dest[slot] = Some(dst);
                 }
                 next_tb_hint = Some(dst);
             }
