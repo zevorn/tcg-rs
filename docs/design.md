@@ -762,7 +762,7 @@ backed by `RiscvCpuState` 字段。
 
 `decodetree` crate 实现了 QEMU 的 decodetree 工具的 Rust 版本，解析 `.decode` 文件并生成 Rust 解码器代码。
 
-**输入**：`frontend/src/riscv/insn32.decode`（65 个 RISC-V 指令模式）
+**输入**：`frontend/src/riscv/insn32.decode`（RV64IMAFDC 指令模式）
 
 **生成的代码**：
 - `Args*` 结构体：每个参数集对应一个结构体（如 `ArgsR { rd, rs1, rs2 }`）
@@ -796,14 +796,22 @@ trait TranslatorOps {
 ```rust
 #[repr(C)]
 struct RiscvCpu {
-    gpr: [u64; 32],  // x0-x31, offset 0..256
-    pc: u64,          // offset 256
+    gpr: [u64; 32],     // x0-x31
+    fpr: [u64; 32],     // f0-f31 (raw bits, NaN-boxed)
+    pc: u64,
+    guest_base: u64,
+    load_res: u64,       // LR 保留地址
+    load_val: u64,       // LR 加载值
+    fflags: u64,         // 浮点异常标志
+    frm: u64,            // 浮点舍入模式
+    ustatus: u64,        // 用户态状态寄存器
+    // uie, utvec, uscratch, uepc, ucause, utval, uip
 }
 ```
 
-**翻译上下文**（`riscv/mod.rs`）：`RiscvDisasContext` 将 32 个 GPR 和 PC 注册为 TCG 全局变量（backed by `RiscvCpu` 字段），env 指针固定到 RBP。
+**翻译上下文**（`riscv/mod.rs`）：`RiscvDisasContext` 将 32 个 GPR、32 个 FPR、PC 及浮点 CSR 注册为 TCG 全局变量（backed by `RiscvCpu` 字段），env 指针固定到 RBP。
 
-**指令翻译**（`riscv/trans.rs`）：实现 `Decode<Context>` trait 的 65 个 `trans_*` 方法，使用 QEMU 风格的 `gen_xxx` 辅助函数模式：
+**指令翻译**（`riscv/trans.rs`）：实现 `Decode<Context>` trait 的 `trans_*` 方法，覆盖 RV64IMAFDC 整数、浮点和压缩指令集，使用 QEMU 风格的 `gen_xxx` 辅助函数模式：
 
 ```rust
 type BinOp = fn(&mut Context, Type, TempIdx, TempIdx, TempIdx) -> TempIdx;
@@ -824,7 +832,7 @@ fn gen_branch(&mut self, ir: &mut Context, rs1: usize, rs2: usize, imm: i64, con
 | decodetree 测试 | `tests/src/decodetree/` | 93 | 解析器、代码生成、字段提取、RVC |
 | 核心单元测试 | `tests/src/core/` | 192 | types/opcodes/temps/labels/ops/context/TBs |
 | 后端回归测试 | `tests/src/backend/` | 256 | x86-64 指令编码、代码缓冲区 |
-| 前端翻译测试 | `tests/src/frontend/mod.rs` | 109 | RV32I/RV64I/RVC 全流水线指令测试 |
+| 前端翻译测试 | `tests/src/frontend/mod.rs` | 126 | RV32I/RV64I/RVC/RV32F 全流水线指令测试 |
 | 差分测试 | `tests/src/frontend/difftest.rs` | 35 | 对比 QEMU qemu-riscv64 |
 | 集成测试 | `tests/src/integration/` | 105 | 端到端 IR→执行 |
 | 执行循环 | `tests/src/exec/` | 12 | TB 缓存、执行循环 |
@@ -891,3 +899,15 @@ fn gen_branch(&mut self, ir: &mut Context, rs1: usize, rs2: usize, imm: i64, con
 | `disas_log` (decodetree)      | `decodetree::generate()`       | `decodetree/src/lib.rs`         |
 | `target/riscv/translate.c`    | `RiscvDisasContext`            | `frontend/src/riscv/mod.rs`     |
 | `trans_rvi.c.inc` (gen_xxx)   | `gen_arith/gen_branch/...`     | `frontend/src/riscv/trans.rs`   |
+
+---
+
+## 7. RISC-V 前端（RV64 用户态）
+
+- 支持 RV64F/RV64D 浮点指令，包括浮点 load/store、算术运算、
+  类型转换、比较/分类、FMA 系列（FMADD/FMSUB/FNMSUB/FNMADD）。
+- 实现浮点相关用户态 CSR（`fflags`、`frm`、`fcsr`）及 U-mode
+  状态/陷阱 CSR，带 FS 状态追踪（仅在写入 FPR 时标记 dirty）。
+- 浮点运算通过 `gen_helper_call` 调用 `fpu.rs` 中的 C ABI
+  辅助函数，由后端 `regalloc_call` 处理 caller-saved 寄存器
+  保存/恢复。
