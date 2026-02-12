@@ -13,14 +13,17 @@ pub mod tb_store;
 pub use exec_loop::{cpu_exec_loop, ExitReason};
 pub use tb_store::TbStore;
 
+use std::cell::UnsafeCell;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use tcg_backend::code_buffer::CodeBuffer;
 use tcg_backend::HostCodeGen;
 use tcg_core::tb::JumpCache;
 use tcg_core::Context;
 
-/// Execution statistics for profiling the TB lookup/chain pipeline.
+/// Execution statistics for profiling the TB lookup/chain
+/// pipeline.
 #[derive(Default)]
 pub struct ExecStats {
     pub loop_iters: u64,
@@ -34,7 +37,6 @@ pub struct ExecStats {
     pub real_exit: u64,
     // Chaining
     pub chain_patched: u64,
-    pub chain_cycle: u64,
     pub chain_already: u64,
     // Hint
     pub hint_used: u64,
@@ -71,7 +73,6 @@ impl fmt::Display for ExecStats {
         writeln!(f, "  real exit:   {}", self.real_exit)?;
         writeln!(f, "--- Chaining ---")?;
         writeln!(f, "  patched:     {}", self.chain_patched)?;
-        writeln!(f, "  cycle:       {}", self.chain_cycle)?;
         writeln!(f, "  already:     {}", self.chain_already)?;
         writeln!(f, "--- Hint ---")?;
         writeln!(f, "  hint used:   {}", self.hint_used)?;
@@ -88,38 +89,56 @@ fn pct(n: u64, total: u64) -> f64 {
 }
 
 /// Trait for guest CPU state used by the execution loop.
-///
-/// Each guest architecture implements this to provide PC/flags
-/// access and frontend translation.
 pub trait GuestCpu {
-    /// Return the current guest program counter.
     fn get_pc(&self) -> u64;
-
-    /// Return CPU flags that affect translation.
     fn get_flags(&self) -> u32;
-
-    /// Translate guest code starting at `pc` into IR.
-    ///
-    /// Returns the number of guest bytes translated.
-    /// Called only on TB cache miss; implementations should
-    /// register globals on the first call and reuse them on
-    /// subsequent calls.
     fn gen_code(&mut self, ir: &mut Context, pc: u64, max_insns: u32) -> u32;
-
-    /// Return a raw pointer to the CPU env struct.
     fn env_ptr(&mut self) -> *mut u8;
 }
 
-/// Execution environment holding all shared translation state.
-pub struct ExecEnv<B: HostCodeGen> {
-    pub tb_store: TbStore,
-    pub jump_cache: JumpCache,
-    pub code_buf: CodeBuffer,
-    pub backend: B,
+/// State protected by translate_lock.
+pub struct TranslateGuard {
     pub ir_ctx: Context,
-    /// Offset where TB code generation starts (after
-    /// prologue/epilogue).
+}
+
+/// Shared across all vCPU threads.
+pub struct SharedState<B: HostCodeGen> {
+    pub tb_store: TbStore,
+    /// Code buffer wrapped in UnsafeCell: emit methods need
+    /// &mut (under translate_lock), patch/read methods use &self.
+    code_buf: UnsafeCell<CodeBuffer>,
+    pub backend: B,
     pub code_gen_start: usize,
+    /// Serializes code generation (IR + emit).
+    pub translate_lock: Mutex<TranslateGuard>,
+}
+
+// SAFETY: code_buf emit is serialized by translate_lock;
+// patch methods are atomic for aligned writes; read methods
+// are inherently safe.
+unsafe impl<B: HostCodeGen + Send> Send for SharedState<B> {}
+unsafe impl<B: HostCodeGen + Sync> Sync for SharedState<B> {}
+
+impl<B: HostCodeGen> SharedState<B> {
+    /// Get shared reference to code buffer (for patch/read).
+    pub fn code_buf(&self) -> &CodeBuffer {
+        // SAFETY: patch/read methods only need &self.
+        unsafe { &*self.code_buf.get() }
+    }
+
+    /// Get mutable reference to code buffer.
+    ///
+    /// # Safety
+    /// Caller must hold translate_lock.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn code_buf_mut(&self) -> &mut CodeBuffer {
+        &mut *self.code_buf.get()
+    }
+}
+
+/// Per-vCPU state (not shared across threads).
+pub struct PerCpuState {
+    pub jump_cache: JumpCache,
     pub stats: ExecStats,
 }
 
@@ -127,11 +146,13 @@ pub struct ExecEnv<B: HostCodeGen> {
 /// to translate a new TB.
 const MIN_CODE_BUF_REMAINING: usize = 4096;
 
+/// Convenience wrapper for single-threaded use.
+pub struct ExecEnv<B: HostCodeGen> {
+    pub shared: Arc<SharedState<B>>,
+    pub per_cpu: PerCpuState,
+}
+
 impl<B: HostCodeGen> ExecEnv<B> {
-    /// Create a new execution environment.
-    ///
-    /// Emits prologue and epilogue into the code buffer and
-    /// initializes the IR context with backend-specific settings.
     pub fn new(mut backend: B) -> Self {
         let mut code_buf =
             CodeBuffer::new(16 * 1024 * 1024).expect("mmap failed");
@@ -142,14 +163,20 @@ impl<B: HostCodeGen> ExecEnv<B> {
         let mut ir_ctx = Context::new();
         backend.init_context(&mut ir_ctx);
 
-        Self {
+        let shared = Arc::new(SharedState {
             tb_store: TbStore::new(),
-            jump_cache: JumpCache::new(),
-            code_buf,
+            code_buf: UnsafeCell::new(code_buf),
             backend,
-            ir_ctx,
             code_gen_start,
-            stats: ExecStats::default(),
+            translate_lock: Mutex::new(TranslateGuard { ir_ctx }),
+        });
+
+        Self {
+            shared,
+            per_cpu: PerCpuState {
+                jump_cache: JumpCache::new(),
+                stats: ExecStats::default(),
+            },
         }
     }
 }
