@@ -31,11 +31,13 @@ impl CodeBuffer {
         }
 
         // SAFETY: mmap with MAP_ANONYMOUS | MAP_PRIVATE, no file backing.
+        // Use RWX so the exec loop can patch goto_tb jumps at runtime
+        // without mprotect round-trips (matches QEMU non-split-wx).
         let ptr = unsafe {
             libc::mmap(
                 ptr::null_mut(),
                 size,
-                libc::PROT_READ | libc::PROT_WRITE,
+                libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
                 libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
                 -1,
                 0,
