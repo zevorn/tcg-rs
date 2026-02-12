@@ -16,8 +16,8 @@ use super::RiscvDisasContext;
 use crate::DisasJumpType;
 use tcg_core::context::Context;
 use tcg_core::tb::{
-    EXCP_EBREAK, EXCP_ECALL, EXCP_UNDEF, TB_EXIT_IDX0,
-    TB_EXIT_IDX1, TB_EXIT_NOCHAIN,
+    EXCP_EBREAK, EXCP_ECALL, EXCP_UNDEF, TB_EXIT_IDX0, TB_EXIT_IDX1,
+    TB_EXIT_NOCHAIN,
 };
 use tcg_core::types::{Cond, MemOp, Type};
 use tcg_core::TempIdx;
@@ -775,6 +775,7 @@ impl RiscvDisasContext {
         let next_pc = self.base.pc_next + self.cur_insn_len as u64;
         let c = ir.new_const(Type::I64, next_pc);
         ir.gen_mov(Type::I64, self.pc, c);
+        ir.gen_goto_tb(0);
         ir.gen_exit_tb(TB_EXIT_IDX0);
 
         // Taken: PC = branch target, return chain slot 1.
@@ -782,6 +783,7 @@ impl RiscvDisasContext {
         let target = (self.base.pc_next as i64 + a.imm) as u64;
         let c = ir.new_const(Type::I64, target);
         ir.gen_mov(Type::I64, self.pc, c);
+        ir.gen_goto_tb(1);
         ir.gen_exit_tb(TB_EXIT_IDX1);
 
         self.base.is_jmp = DisasJumpType::NoReturn;
@@ -815,6 +817,7 @@ impl Decode<Context> for RiscvDisasContext {
         let target = (self.base.pc_next as i64 + a.imm) as u64;
         let c = ir.new_const(Type::I64, target);
         ir.gen_mov(Type::I64, self.pc, c);
+        ir.gen_goto_tb(0);
         ir.gen_exit_tb(TB_EXIT_IDX0);
         self.base.is_jmp = DisasJumpType::NoReturn;
         true

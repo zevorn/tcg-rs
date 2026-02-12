@@ -46,6 +46,12 @@ pub struct Context {
     /// End offset in host code for each guest instruction
     /// (indexed by guest insn number).
     pub gen_insn_end_off: Vec<u16>,
+
+    // -- TB identification --
+    /// Index of the TB being translated. Used by the backend to
+    /// encode the source TB in exit_tb return values for direct
+    /// chaining.
+    pub tb_idx: u32,
 }
 
 impl Context {
@@ -62,6 +68,7 @@ impl Context {
             reserved_regs: RegSet::EMPTY,
             const_table: Default::default(),
             gen_insn_end_off: Vec::with_capacity(MAX_INSNS),
+            tb_idx: 0,
         }
     }
 

@@ -28,9 +28,8 @@ pub unsafe fn translate_and_execute(
     buf: &mut CodeBuffer,
     env: *mut u8,
 ) -> usize {
-    buf.set_writable().expect("set_writable failed");
+    // Buffer is RWX, no permission switch needed.
     let tb_start = translate(ctx, backend, buf);
-    buf.set_executable().expect("set_executable failed");
 
     // Prologue signature:
     //   fn(env: *mut u8, tb_ptr: *const u8) -> usize
@@ -38,5 +37,9 @@ pub unsafe fn translate_and_execute(
     let prologue_fn: unsafe extern "C" fn(*mut u8, *const u8) -> usize =
         core::mem::transmute(buf.base_ptr());
     let tb_ptr = buf.ptr_at(tb_start);
-    prologue_fn(env, tb_ptr)
+    let raw = prologue_fn(env, tb_ptr);
+    // Decode: strip the encoded TB index, return only the
+    // exit code (slot number or exception code).
+    let (_, exit_code) = tcg_core::tb::decode_tb_exit(raw);
+    exit_code
 }

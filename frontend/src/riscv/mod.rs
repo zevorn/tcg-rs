@@ -158,6 +158,7 @@ impl TranslatorOps for RiscvTranslator {
                 let pc_val = ctx.base.pc_next;
                 let pc_const = ir.new_const(Type::I64, pc_val);
                 ir.gen_mov(Type::I64, ctx.pc, pc_const);
+                ir.gen_goto_tb(0);
                 ir.gen_exit_tb(TB_EXIT_IDX0);
             }
         }

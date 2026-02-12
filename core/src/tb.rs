@@ -31,8 +31,13 @@ pub struct TranslationBlock {
     /// Used to reset the jump when unlinking.
     pub jmp_reset_offset: [Option<u32>; 2],
 
-    /// Currently linked target TB index for each `goto_tb` slot.
-    pub jmp_target: [Option<usize>; 2],
+    /// Outgoing edge: destination TB index for each `goto_tb` slot.
+    /// `None` = not yet linked (jump still targets the epilogue).
+    pub jmp_dest: [Option<usize>; 2],
+
+    /// Incoming edges: list of (source_tb_idx, slot) pairs.
+    /// Records which TBs have their goto_tb patched to jump here.
+    pub jmp_list: Vec<(usize, usize)>,
 
     /// Single-entry target cache for indirect exits
     /// (`TB_EXIT_NOCHAIN`).  Simplified `lookup_and_goto_ptr`:
@@ -75,7 +80,8 @@ impl TranslationBlock {
             host_size: 0,
             jmp_insn_offset: [None; 2],
             jmp_reset_offset: [None; 2],
-            jmp_target: [None; 2],
+            jmp_dest: [None; 2],
+            jmp_list: Vec::new(),
             exit_target: None,
             phys_pc: 0,
             hash_next: None,
@@ -139,6 +145,37 @@ pub const TB_EXIT_MAX: u64 = 3;
 pub const EXCP_ECALL: u64 = TB_EXIT_MAX;
 pub const EXCP_EBREAK: u64 = TB_EXIT_MAX + 1;
 pub const EXCP_UNDEF: u64 = TB_EXIT_MAX + 2;
+
+/// Encode an exit_tb return value with the source TB index.
+///
+/// For chainable exits (val < `TB_EXIT_MAX`), the upper 32 bits
+/// carry `tb_idx + 1` so the exec loop can identify which TB
+/// actually exited after direct chaining.  Real exits (val >=
+/// `TB_EXIT_MAX`) are returned unchanged.
+#[inline]
+pub fn encode_tb_exit(tb_idx: u32, val: u64) -> u64 {
+    if val < TB_EXIT_MAX {
+        ((tb_idx as u64 + 1) << 32) | val
+    } else {
+        val
+    }
+}
+
+/// Decode an exit_tb return value.
+///
+/// Returns `(source_tb_idx, exit_code)`.  For chainable exits
+/// `source_tb_idx` is `Some(idx)`; for real exits it is `None`.
+#[inline]
+pub fn decode_tb_exit(raw: usize) -> (Option<usize>, usize) {
+    let marker = raw >> 32;
+    if marker != 0 {
+        let tb_idx = marker - 1;
+        let slot = raw & 3;
+        (Some(tb_idx), slot)
+    } else {
+        (None, raw)
+    }
+}
 
 /// Per-CPU direct-mapped TB jump cache.
 ///

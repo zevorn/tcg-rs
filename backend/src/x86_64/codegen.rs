@@ -316,7 +316,8 @@ impl HostCodeGen for X86_64CodeGen {
             }
             Opcode::ExitTb => {
                 let val = cargs[0] as u64;
-                self.emit_exit_tb(buf, val);
+                let encoded = tcg_core::tb::encode_tb_exit(ctx.tb_idx, val);
+                self.emit_exit_tb(buf, encoded);
             }
             Opcode::GotoTb => {
                 let (jmp, reset) = self.emit_goto_tb(buf);
@@ -637,9 +638,7 @@ impl HostCodeGen for X86_64CodeGen {
                 }
             }
             Opcode::Call => {
-                let func =
-                    (cargs[1] as u64) << 32
-                        | (cargs[0] as u64);
+                let func = (cargs[1] as u64) << 32 | (cargs[0] as u64);
                 emit_mov_ri(buf, true, Reg::R11, func);
                 emit_call_reg(buf, Reg::R11);
             }

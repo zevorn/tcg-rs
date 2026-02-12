@@ -1,3 +1,5 @@
+use tcg_backend::code_buffer::CodeBuffer;
+use tcg_backend::HostCodeGen;
 use tcg_core::tb::{TranslationBlock, TB_HASH_SIZE};
 
 /// Storage and hash-table lookup for translation blocks.
@@ -54,13 +56,38 @@ impl TbStore {
         &mut self.tbs[idx]
     }
 
-    /// Mark a TB as invalid and remove it from the hash chain.
-    pub fn invalidate(&mut self, tb_idx: usize) {
+    /// Mark a TB as invalid, unlink all chained jumps, and
+    /// remove it from the hash chain.
+    pub fn invalidate<B: HostCodeGen>(
+        &mut self,
+        tb_idx: usize,
+        code_buf: &mut CodeBuffer,
+        backend: &mut B,
+    ) {
         self.tbs[tb_idx].invalid = true;
+
+        // 1. Unlink incoming edges: reset each source TB's
+        //    goto_tb jump back to its epilogue fallback.
+        let jmp_list = std::mem::take(&mut self.tbs[tb_idx].jmp_list);
+        for (src, slot) in jmp_list {
+            Self::reset_jump(&self.tbs[src], code_buf, backend, slot);
+            self.tbs[src].jmp_dest[slot] = None;
+        }
+
+        // 2. Unlink outgoing edges: remove ourselves from
+        //    each destination TB's jmp_list.
+        for slot in 0..2 {
+            if let Some(dst) = self.tbs[tb_idx].jmp_dest[slot].take() {
+                self.tbs[dst]
+                    .jmp_list
+                    .retain(|&(s, n)| !(s == tb_idx && n == slot));
+            }
+        }
+
+        // 3. Remove from hash chain.
         let pc = self.tbs[tb_idx].pc;
         let flags = self.tbs[tb_idx].flags;
         let bucket = TranslationBlock::hash(pc, flags);
-        // Remove from hash chain
         let mut prev: Option<usize> = None;
         let mut cur = self.hash_buckets[bucket];
         while let Some(idx) = cur {
@@ -76,6 +103,22 @@ impl TbStore {
             }
             prev = cur;
             cur = self.tbs[idx].hash_next;
+        }
+    }
+
+    /// Reset a goto_tb jump back to its original (epilogue)
+    /// target, effectively unlinking the direct chain.
+    fn reset_jump<B: HostCodeGen>(
+        tb: &TranslationBlock,
+        code_buf: &mut CodeBuffer,
+        backend: &mut B,
+        slot: usize,
+    ) {
+        if let (Some(jmp_off), Some(reset_off)) =
+            (tb.jmp_insn_offset[slot], tb.jmp_reset_offset[slot])
+        {
+            // Offsets are absolute code buffer positions.
+            backend.patch_jump(code_buf, jmp_off as usize, reset_off as usize);
         }
     }
 
