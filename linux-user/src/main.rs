@@ -117,7 +117,7 @@ fn main() {
                     }
                     SyscallResult::Exit(code) => {
                         if show_stats {
-                            eprint!("{}", env.stats);
+                            eprint!("{}", env.per_cpu.stats);
                         }
                         process::exit(code);
                     }
@@ -125,28 +125,28 @@ fn main() {
             }
             ExitReason::Exit(v) if v == EXCP_EBREAK as usize => {
                 if show_stats {
-                    eprint!("{}", env.stats);
+                    eprint!("{}", env.per_cpu.stats);
                 }
                 eprintln!("ebreak at pc={:#x}", lcpu.cpu.pc);
                 process::exit(1);
             }
             ExitReason::Exit(v) if v == EXCP_UNDEF as usize => {
                 if show_stats {
-                    eprint!("{}", env.stats);
+                    eprint!("{}", env.per_cpu.stats);
                 }
                 eprintln!("illegal instruction at pc={:#x}", lcpu.cpu.pc);
                 process::exit(1);
             }
             ExitReason::Exit(v) => {
                 if show_stats {
-                    eprint!("{}", env.stats);
+                    eprint!("{}", env.per_cpu.stats);
                 }
                 eprintln!("unexpected exit {v}");
                 process::exit(1);
             }
             ExitReason::BufferFull => {
                 if show_stats {
-                    eprint!("{}", env.stats);
+                    eprint!("{}", env.per_cpu.stats);
                 }
                 eprintln!("code buffer full");
                 process::exit(1);
