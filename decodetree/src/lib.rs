@@ -774,12 +774,12 @@ addi ............ ..... 000 ..... 0010011 @i
         assert_eq!(addi.args_name, "i");
     }
 
-    // ── Full riscv32.decode parse ──────────────────────────────
+    // ── Full insn32.decode parse ───────────────────────────────
 
     #[test]
     fn parse_riscv32_decode() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
         assert_eq!(p.patterns.len(), 65);
@@ -809,7 +809,7 @@ addi ............ ..... 000 ..... 0010011 @i
     #[test]
     fn generate_riscv32_decode() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let mut out = Vec::new();
         generate(&input, &mut out).unwrap();
@@ -828,7 +828,7 @@ addi ............ ..... 000 ..... 0010011 @i
     #[test]
     fn pattern_masks_r_type() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
         let find =
@@ -849,7 +849,7 @@ addi ............ ..... 000 ..... 0010011 @i
     #[test]
     fn pattern_masks_i_type() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
         let find =
@@ -867,7 +867,7 @@ addi ............ ..... 000 ..... 0010011 @i
     #[test]
     fn pattern_masks_b_type() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
         let find =
@@ -884,7 +884,7 @@ addi ............ ..... 000 ..... 0010011 @i
     #[test]
     fn pattern_masks_shift() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
         let find =
@@ -1106,7 +1106,7 @@ lui  .................... ..... 0110111 @u
     #[test]
     fn auto_argset_for_fence() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let p = parse(&input).unwrap();
         let fence = p.patterns.iter().find(|p| p.name == "fence").unwrap();
@@ -1211,7 +1211,7 @@ lui  .................... ..... 0110111 @u
 
     fn riscv_parsed() -> Parsed {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         parse(&input).unwrap()
     }
@@ -1297,7 +1297,7 @@ lui  .................... ..... 0110111 @u
     #[test]
     fn generate_fence_auto_struct() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let mut out = Vec::new();
         generate(&input, &mut out).unwrap();
@@ -1309,7 +1309,7 @@ lui  .................... ..... 0110111 @u
     #[test]
     fn generate_no_identity_mask() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let mut out = Vec::new();
         generate(&input, &mut out).unwrap();
@@ -1323,7 +1323,7 @@ lui  .................... ..... 0110111 @u
     #[test]
     fn generate_no_shift_zero() {
         let input =
-            std::fs::read_to_string("../frontend/decode/riscv32.decode")
+            std::fs::read_to_string("../frontend/src/riscv/insn32.decode")
                 .unwrap();
         let mut out = Vec::new();
         generate(&input, &mut out).unwrap();

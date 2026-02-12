@@ -762,7 +762,7 @@ backed by `RiscvCpuState` 字段。
 
 `decodetree` crate 实现了 QEMU 的 decodetree 工具的 Rust 版本，解析 `.decode` 文件并生成 Rust 解码器代码。
 
-**输入**：`frontend/decode/riscv32.decode`（65 个 RISC-V 指令模式）
+**输入**：`frontend/src/riscv/insn32.decode`（65 个 RISC-V 指令模式）
 
 **生成的代码**：
 - `Args*` 结构体：每个参数集对应一个结构体（如 `ArgsR { rd, rs1, rs2 }`）

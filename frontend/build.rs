@@ -4,12 +4,16 @@ use std::path::Path;
 
 fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
-    let decode_file = Path::new("decode/riscv32.decode");
+    let decode_file =
+        Path::new("src/riscv/insn32.decode");
 
-    println!("cargo::rerun-if-changed={}", decode_file.display());
+    println!(
+        "cargo::rerun-if-changed={}",
+        decode_file.display()
+    );
 
-    let input =
-        fs::read_to_string(decode_file).expect("failed to read riscv32.decode");
+    let input = fs::read_to_string(decode_file)
+        .expect("failed to read insn32.decode");
 
     let mut output = Vec::new();
     decodetree::generate(&input, &mut output)
