@@ -1,13 +1,14 @@
 //! RISC-V frontend — RV64 user-mode instruction translation.
 
 pub mod cpu;
+mod fpu;
 #[allow(dead_code)]
 mod insn_decode;
-mod fpu;
 mod trans;
 
 use crate::{DisasContextBase, DisasJumpType, TranslatorOps};
 use cpu::{gpr_offset, LOAD_RES_OFFSET, LOAD_VAL_OFFSET, NUM_GPRS, PC_OFFSET};
+use tcg_core::tb::{EXCP_UNDEF, TB_EXIT_IDX0};
 use tcg_core::{Context, TempIdx, Type};
 
 // ---------------------------------------------------------------
@@ -140,7 +141,7 @@ impl TranslatorOps for RiscvTranslator {
             let pc_val = ctx.base.pc_next;
             let pc_const = ir.new_const(Type::I64, pc_val);
             ir.gen_mov(Type::I64, ctx.pc, pc_const);
-            ir.gen_exit_tb(3);
+            ir.gen_exit_tb(EXCP_UNDEF);
             ctx.base.is_jmp = DisasJumpType::NoReturn;
         }
 
@@ -153,11 +154,11 @@ impl TranslatorOps for RiscvTranslator {
                 // TB already terminated by the instruction.
             }
             DisasJumpType::Next | DisasJumpType::TooMany => {
-                // Fall through: update PC and exit.
+                // Fall through: update PC and return chain slot 0.
                 let pc_val = ctx.base.pc_next;
                 let pc_const = ir.new_const(Type::I64, pc_val);
                 ir.gen_mov(Type::I64, ctx.pc, pc_const);
-                ir.gen_exit_tb(0);
+                ir.gen_exit_tb(TB_EXIT_IDX0);
             }
         }
     }

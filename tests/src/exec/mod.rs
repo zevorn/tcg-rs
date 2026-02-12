@@ -2,6 +2,7 @@
 
 use tcg_backend::X86_64CodeGen;
 use tcg_core::context::Context;
+use tcg_core::tb::{EXCP_EBREAK, EXCP_ECALL};
 use tcg_core::TempIdx;
 use tcg_exec::exec_loop::{cpu_exec_loop, ExitReason};
 use tcg_exec::{ExecEnv, GuestCpu};
@@ -174,7 +175,11 @@ fn run(insns: &[u32], setup: impl FnOnce(&mut TestCpu)) -> TestCpu {
     setup(&mut t);
     let mut env = ExecEnv::new(X86_64CodeGen::new());
     let r = unsafe { cpu_exec_loop(&mut env, &mut t) };
-    assert_eq!(r, ExitReason::Exit(1), "expected ecall exit");
+    assert_eq!(
+        r,
+        ExitReason::Exit(EXCP_ECALL as usize),
+        "expected ecall exit"
+    );
     t
 }
 
@@ -186,7 +191,7 @@ fn run_env(
     setup(&mut t);
     let mut env = ExecEnv::new(X86_64CodeGen::new());
     let r = unsafe { cpu_exec_loop(&mut env, &mut t) };
-    assert_eq!(r, ExitReason::Exit(1));
+    assert_eq!(r, ExitReason::Exit(EXCP_ECALL as usize));
     (t, env)
 }
 
@@ -215,7 +220,7 @@ fn test_exec_loop_cache_hit() {
     let mut env = ExecEnv::new(X86_64CodeGen::new());
 
     let r1 = unsafe { cpu_exec_loop(&mut env, &mut t) };
-    assert_eq!(r1, ExitReason::Exit(1));
+    assert_eq!(r1, ExitReason::Exit(EXCP_ECALL as usize));
     assert_eq!(t.cpu.gpr[1], 5);
     assert_eq!(env.tb_store.len(), 1);
 
@@ -223,7 +228,7 @@ fn test_exec_loop_cache_hit() {
     t.cpu.pc = 0;
     t.cpu.gpr[1] = 0;
     let r2 = unsafe { cpu_exec_loop(&mut env, &mut t) };
-    assert_eq!(r2, ExitReason::Exit(1));
+    assert_eq!(r2, ExitReason::Exit(EXCP_ECALL as usize));
     assert_eq!(t.cpu.gpr[1], 5);
     assert_eq!(env.tb_store.len(), 1);
 }
@@ -629,7 +634,7 @@ fn test_ebreak_exit_code() {
     let mut t = TestCpu::new(&insns);
     let mut env = ExecEnv::new(X86_64CodeGen::new());
     let r = unsafe { cpu_exec_loop(&mut env, &mut t) };
-    assert_eq!(r, ExitReason::Exit(2));
+    assert_eq!(r, ExitReason::Exit(EXCP_EBREAK as usize));
     assert_eq!(t.cpu.gpr[1], 77);
 }
 

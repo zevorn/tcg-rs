@@ -31,6 +31,15 @@ pub struct TranslationBlock {
     /// Used to reset the jump when unlinking.
     pub jmp_reset_offset: [Option<u32>; 2],
 
+    /// Currently linked target TB index for each `goto_tb` slot.
+    pub jmp_target: [Option<usize>; 2],
+
+    /// Single-entry target cache for indirect exits
+    /// (`TB_EXIT_NOCHAIN`).  Simplified `lookup_and_goto_ptr`:
+    /// caches the last observed destination so the exec loop can
+    /// skip `tb_find` when the target repeats.
+    pub exit_target: Option<usize>,
+
     /// Physical page address for TB invalidation tracking.
     pub phys_pc: u64,
 
@@ -66,6 +75,8 @@ impl TranslationBlock {
             host_size: 0,
             jmp_insn_offset: [None; 2],
             jmp_reset_offset: [None; 2],
+            jmp_target: [None; 2],
+            exit_target: None,
             phys_pc: 0,
             hash_next: None,
             invalid: false,
@@ -106,6 +117,28 @@ pub const TB_HASH_SIZE: usize = 1 << 15; // 32768
 
 /// Number of entries in the per-CPU jump cache.
 pub const TB_JMP_CACHE_SIZE: usize = 1 << 12; // 4096
+
+/// TB exit value encoding (following QEMU `TB_EXIT_*` convention).
+///
+/// The low values are reserved for the exec loop's internal TB
+/// chaining protocol.  Real guest exits (ECALL, EBREAK, etc.)
+/// must use values >= `TB_EXIT_MAX`.
+///
+/// | Value | Constant | Meaning |
+/// |-------|----------|---------|
+/// | 0 | `TB_EXIT_IDX0` | `goto_tb` slot 0 — chainable |
+/// | 1 | `TB_EXIT_IDX1` | `goto_tb` slot 1 — chainable |
+/// | 2 | `TB_EXIT_NOCHAIN` | Indirect jump — look up by PC |
+/// | >=3 | `TB_EXIT_MAX`.. | Real exit — returned to caller |
+pub const TB_EXIT_IDX0: u64 = 0;
+pub const TB_EXIT_IDX1: u64 = 1;
+pub const TB_EXIT_NOCHAIN: u64 = 2;
+pub const TB_EXIT_MAX: u64 = 3;
+
+/// Guest exception exit codes (must be >= `TB_EXIT_MAX`).
+pub const EXCP_ECALL: u64 = TB_EXIT_MAX;
+pub const EXCP_EBREAK: u64 = TB_EXIT_MAX + 1;
+pub const EXCP_UNDEF: u64 = TB_EXIT_MAX + 2;
 
 /// Per-CPU direct-mapped TB jump cache.
 ///

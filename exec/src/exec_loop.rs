@@ -1,6 +1,7 @@
 use crate::{ExecEnv, GuestCpu, MIN_CODE_BUF_REMAINING};
 use tcg_backend::translate::translate;
 use tcg_backend::HostCodeGen;
+use tcg_core::tb::TB_EXIT_NOCHAIN;
 
 /// Reason the execution loop exited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,18 +29,75 @@ where
     B: HostCodeGen,
     C: GuestCpu,
 {
-    loop {
-        let pc = cpu.get_pc();
-        let flags = cpu.get_flags();
+    let mut next_tb_hint: Option<usize> = None;
 
-        let tb_idx = match tb_find(env, cpu, pc, flags) {
+    loop {
+        let tb_idx = match next_tb_hint.take() {
             Some(idx) => idx,
-            None => return ExitReason::BufferFull,
+            None => {
+                let pc = cpu.get_pc();
+                let flags = cpu.get_flags();
+                match tb_find(env, cpu, pc, flags) {
+                    Some(idx) => idx,
+                    None => return ExitReason::BufferFull,
+                }
+            }
         };
 
         let exit_val = cpu_tb_exec(env, cpu, tb_idx);
-        if exit_val != 0 {
-            return ExitReason::Exit(exit_val);
+        match exit_val {
+            v @ 0..=1 => {
+                // goto_tb slot 0 or 1 — chainable direct branch.
+                // QEMU: tb_add_jump(last_tb, tb_exit, next_tb).
+                let slot = v;
+                let pc = cpu.get_pc();
+                let flags = cpu.get_flags();
+                if let Some(dst) =
+                    env.tb_store.get(tb_idx).jmp_target[slot]
+                {
+                    let tb = env.tb_store.get(dst);
+                    if !tb.invalid
+                        && tb.pc == pc
+                        && tb.flags == flags
+                    {
+                        next_tb_hint = Some(dst);
+                        continue;
+                    }
+                }
+                let dst = match tb_find(env, cpu, pc, flags) {
+                    Some(idx) => idx,
+                    None => return ExitReason::BufferFull,
+                };
+                env.tb_store.get_mut(tb_idx).jmp_target[slot] =
+                    Some(dst);
+                next_tb_hint = Some(dst);
+            }
+            v if v == TB_EXIT_NOCHAIN as usize => {
+                // Indirect jump (JALR etc.) — simplified
+                // lookup_and_goto_ptr: single-entry cache per TB.
+                let pc = cpu.get_pc();
+                let flags = cpu.get_flags();
+                if let Some(dst) =
+                    env.tb_store.get(tb_idx).exit_target
+                {
+                    let tb = env.tb_store.get(dst);
+                    if !tb.invalid
+                        && tb.pc == pc
+                        && tb.flags == flags
+                    {
+                        next_tb_hint = Some(dst);
+                        continue;
+                    }
+                }
+                let dst = match tb_find(env, cpu, pc, flags) {
+                    Some(idx) => idx,
+                    None => return ExitReason::BufferFull,
+                };
+                env.tb_store.get_mut(tb_idx).exit_target =
+                    Some(dst);
+                next_tb_hint = Some(dst);
+            }
+            _ => return ExitReason::Exit(exit_val),
         }
     }
 }

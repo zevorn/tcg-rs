@@ -8,6 +8,8 @@ fn tb_new() {
     assert_eq!(tb.icount, 0);
     assert_eq!(tb.jmp_insn_offset, [None, None]);
     assert_eq!(tb.jmp_reset_offset, [None, None]);
+    assert_eq!(tb.jmp_target, [None, None]);
+    assert_eq!(tb.exit_target, None);
     assert_eq!(tb.hash_next, None);
 }
 

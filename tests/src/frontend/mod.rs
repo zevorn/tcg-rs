@@ -8,6 +8,7 @@ use tcg_backend::code_buffer::CodeBuffer;
 use tcg_backend::translate::translate_and_execute;
 use tcg_backend::HostCodeGen;
 use tcg_backend::X86_64CodeGen;
+use tcg_core::tb::{EXCP_EBREAK, EXCP_ECALL};
 use tcg_core::Context;
 use tcg_frontend::riscv::cpu::RiscvCpu;
 use tcg_frontend::riscv::{RiscvDisasContext, RiscvTranslator};
@@ -607,7 +608,7 @@ fn test_fence_nop() {
 fn test_ecall_exit() {
     let mut cpu = RiscvCpu::new();
     let exit = run_rv(&mut cpu, ecall());
-    assert_eq!(exit, 1);
+    assert_eq!(exit, EXCP_ECALL as usize);
     assert_eq!(cpu.pc, 0); // PC synced to insn PC
 }
 
@@ -615,7 +616,7 @@ fn test_ecall_exit() {
 fn test_ebreak_exit() {
     let mut cpu = RiscvCpu::new();
     let exit = run_rv(&mut cpu, ebreak());
-    assert_eq!(exit, 2);
+    assert_eq!(exit, EXCP_EBREAK as usize);
     assert_eq!(cpu.pc, 0);
 }
 
@@ -1205,7 +1206,7 @@ fn test_c_bnez_not_taken() {
 fn test_c_ebreak() {
     let mut cpu = RiscvCpu::new();
     let exit = run_rvc(&mut cpu, c_ebreak());
-    assert_eq!(exit, 2);
+    assert_eq!(exit, EXCP_EBREAK as usize);
 }
 
 // ── Mixed 32/16-bit sequence ─────────────────────────────────

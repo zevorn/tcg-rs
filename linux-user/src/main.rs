@@ -3,6 +3,7 @@ use std::process;
 
 use tcg_backend::X86_64CodeGen;
 use tcg_core::context::Context;
+use tcg_core::tb::{EXCP_EBREAK, EXCP_ECALL, EXCP_UNDEF};
 use tcg_core::TempIdx;
 use tcg_exec::exec_loop::{cpu_exec_loop, ExitReason};
 use tcg_exec::{ExecEnv, GuestCpu};
@@ -101,7 +102,7 @@ fn main() {
     loop {
         let reason = unsafe { cpu_exec_loop(&mut env, &mut lcpu) };
         match reason {
-            ExitReason::Exit(1) => {
+            ExitReason::Exit(v) if v == EXCP_ECALL as usize => {
                 // ECALL
                 match handle_syscall(
                     &mut space,
@@ -118,11 +119,11 @@ fn main() {
                     }
                 }
             }
-            ExitReason::Exit(2) => {
+            ExitReason::Exit(v) if v == EXCP_EBREAK as usize => {
                 eprintln!("ebreak at pc={:#x}", lcpu.cpu.pc);
                 process::exit(1);
             }
-            ExitReason::Exit(3) => {
+            ExitReason::Exit(v) if v == EXCP_UNDEF as usize => {
                 eprintln!("illegal instruction at pc={:#x}", lcpu.cpu.pc);
                 process::exit(1);
             }
