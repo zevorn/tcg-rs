@@ -821,12 +821,16 @@ fn gen_branch(&mut self, ir: &mut Context, rs1: usize, rs2: usize, imm: i64, con
 
 | 测试类别 | 位置 | 数量 | 说明 |
 |---------|------|------|------|
-| decodetree 单元测试 | `decodetree/src/lib.rs` | 58 | 解析器、代码生成、字段提取 |
-| 核心单元测试 | `tests/src/core/` | ~200 | types/opcodes/temps/labels/ops/context/TBs |
-| 后端回归测试 | `tests/src/backend/` | ~300 | x86-64 指令编码、codegen 别名 |
-| 前端翻译测试 | `tests/src/frontend/mod.rs` | 58 | 全流水线 RISC-V 指令测试 |
+| decodetree 测试 | `tests/src/decodetree/` | 93 | 解析器、代码生成、字段提取、RVC |
+| 核心单元测试 | `tests/src/core/` | 192 | types/opcodes/temps/labels/ops/context/TBs |
+| 后端回归测试 | `tests/src/backend/` | 256 | x86-64 指令编码、代码缓冲区 |
+| 前端翻译测试 | `tests/src/frontend/mod.rs` | 109 | RV32I/RV64I/RVC 全流水线指令测试 |
 | 差分测试 | `tests/src/frontend/difftest.rs` | 35 | 对比 QEMU qemu-riscv64 |
-| 集成测试 | `tests/src/integration/` | ~42 | 端到端 IR→执行 |
+| 集成测试 | `tests/src/integration/` | 105 | 端到端 IR→执行 |
+| 执行循环 | `tests/src/exec/` | 12 | TB 缓存、执行循环 |
+| linux-user | `linux-user/tests/` | 6 | ELF 加载、客户程序执行 |
+
+详细文档见 [`docs/testing.md`](testing.md)。
 
 ---
 

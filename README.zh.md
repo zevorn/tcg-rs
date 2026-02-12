@@ -120,7 +120,7 @@ cargo fmt --check            # 格式检查
 
 - [设计文档](docs/design.md) — 架构、数据结构、约束系统、翻译流水线
 - [x86-64 后端](docs/x86_64-backend.md) — 指令编码器、约束表、codegen 分派
-- [Difftest 框架](docs/difftest.md) — 差分测试框架（对比 QEMU qemu-riscv64）
+- [测试体系](docs/testing.md) — 测试架构、运行方式、差分测试、客户程序
 - [代码风格](docs/coding-style.md) — 命名规范、格式规则
 
 ## 许可证

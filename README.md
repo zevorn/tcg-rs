@@ -120,7 +120,7 @@ This project references the following QEMU source files:
 
 - [Design Document](docs/design.md) — Architecture, data structures, constraint system, translation pipeline
 - [x86-64 Backend](docs/x86_64-backend.md) — Instruction encoder, constraint table, codegen dispatch
-- [Difftest Framework](docs/difftest.md) — Differential testing against QEMU (qemu-riscv64)
+- [Testing](docs/testing.md) — Test architecture, running tests, difftest framework, guest programs
 - [Coding Style](docs/coding-style.md) — Naming conventions, formatting rules
 
 ## License
