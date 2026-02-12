@@ -191,6 +191,165 @@ impl RiscvDisasContext {
         self.gen_set_gpr_sx32(ir, a.rd, d32);
         true
     }
+    // -- M-extension helpers (mul/div/rem) -----------------
+
+    /// Signed division with RISC-V special-case handling.
+    /// div-by-zero → -1 (quot) / dividend (rem).
+    /// MIN / -1 → MIN (quot) / 0 (rem).
+    fn gen_div_rem(&self, ir: &mut Context, a: &ArgsR, want_rem: bool) -> bool {
+        let s1 = self.gpr_or_zero(ir, a.rs1);
+        let s2 = self.gpr_or_zero(ir, a.rs2);
+        let zero = ir.new_const(Type::I64, 0);
+        let one = ir.new_const(Type::I64, 1);
+        let neg1 = ir.new_const(Type::I64, u64::MAX);
+
+        // Replace divisor=0 with 1 to avoid trap
+        let safe = ir.new_temp(Type::I64);
+        ir.gen_movcond(Type::I64, safe, s2, zero, one, s2, Cond::Eq);
+        // Replace divisor=-1 with 1 to avoid overflow
+        ir.gen_movcond(Type::I64, safe, safe, neg1, one, safe, Cond::Eq);
+
+        let ah = ir.new_temp(Type::I64);
+        let c63 = ir.new_const(Type::I64, 63);
+        ir.gen_sar(Type::I64, ah, s1, c63);
+
+        let quot = ir.new_temp(Type::I64);
+        let rem = ir.new_temp(Type::I64);
+        ir.gen_divs2(Type::I64, quot, rem, s1, ah, safe);
+
+        if want_rem {
+            // 0 → s1, -1 → 0, else → rem
+            let r = ir.new_temp(Type::I64);
+            ir.gen_movcond(Type::I64, r, s2, zero, s1, rem, Cond::Eq);
+            ir.gen_movcond(Type::I64, r, s2, neg1, zero, r, Cond::Eq);
+            self.gen_set_gpr(ir, a.rd, r);
+        } else {
+            // 0 → -1, -1 → neg(s1), else → quot
+            let neg_s1 = ir.new_temp(Type::I64);
+            ir.gen_neg(Type::I64, neg_s1, s1);
+            let r = ir.new_temp(Type::I64);
+            ir.gen_movcond(Type::I64, r, s2, zero, neg1, quot, Cond::Eq);
+            ir.gen_movcond(Type::I64, r, s2, neg1, neg_s1, r, Cond::Eq);
+            self.gen_set_gpr(ir, a.rd, r);
+        }
+        true
+    }
+
+    /// Unsigned division with RISC-V special-case handling.
+    /// div-by-zero → MAX (quot) / dividend (rem).
+    fn gen_divu_remu(
+        &self,
+        ir: &mut Context,
+        a: &ArgsR,
+        want_rem: bool,
+    ) -> bool {
+        let s1 = self.gpr_or_zero(ir, a.rs1);
+        let s2 = self.gpr_or_zero(ir, a.rs2);
+        let zero = ir.new_const(Type::I64, 0);
+        let one = ir.new_const(Type::I64, 1);
+
+        let safe = ir.new_temp(Type::I64);
+        ir.gen_movcond(Type::I64, safe, s2, zero, one, s2, Cond::Eq);
+
+        let quot = ir.new_temp(Type::I64);
+        let rem = ir.new_temp(Type::I64);
+        ir.gen_divu2(Type::I64, quot, rem, s1, zero, safe);
+
+        if want_rem {
+            let r = ir.new_temp(Type::I64);
+            ir.gen_movcond(Type::I64, r, s2, zero, s1, rem, Cond::Eq);
+            self.gen_set_gpr(ir, a.rd, r);
+        } else {
+            let neg1 = ir.new_const(Type::I64, u64::MAX);
+            let r = ir.new_temp(Type::I64);
+            ir.gen_movcond(Type::I64, r, s2, zero, neg1, quot, Cond::Eq);
+            self.gen_set_gpr(ir, a.rd, r);
+        }
+        true
+    }
+
+    /// 32-bit signed division (W-suffix).
+    fn gen_div_rem_w(
+        &self,
+        ir: &mut Context,
+        a: &ArgsR,
+        want_rem: bool,
+    ) -> bool {
+        let s1 = self.gpr_or_zero(ir, a.rs1);
+        let s2 = self.gpr_or_zero(ir, a.rs2);
+        let a32 = ir.new_temp(Type::I32);
+        ir.gen_extrl_i64_i32(a32, s1);
+        let b32 = ir.new_temp(Type::I32);
+        ir.gen_extrl_i64_i32(b32, s2);
+
+        let zero = ir.new_const(Type::I32, 0);
+        let one = ir.new_const(Type::I32, 1);
+        let neg1 = ir.new_const(Type::I32, u32::MAX as u64);
+
+        let safe = ir.new_temp(Type::I32);
+        ir.gen_movcond(Type::I32, safe, b32, zero, one, b32, Cond::Eq);
+        ir.gen_movcond(Type::I32, safe, safe, neg1, one, safe, Cond::Eq);
+
+        let ah = ir.new_temp(Type::I32);
+        let c31 = ir.new_const(Type::I32, 31);
+        ir.gen_sar(Type::I32, ah, a32, c31);
+
+        let quot = ir.new_temp(Type::I32);
+        let rem = ir.new_temp(Type::I32);
+        ir.gen_divs2(Type::I32, quot, rem, a32, ah, safe);
+
+        if want_rem {
+            let r = ir.new_temp(Type::I32);
+            ir.gen_movcond(Type::I32, r, b32, zero, a32, rem, Cond::Eq);
+            ir.gen_movcond(Type::I32, r, b32, neg1, zero, r, Cond::Eq);
+            self.gen_set_gpr_sx32(ir, a.rd, r);
+        } else {
+            let neg_a = ir.new_temp(Type::I32);
+            ir.gen_neg(Type::I32, neg_a, a32);
+            let r = ir.new_temp(Type::I32);
+            ir.gen_movcond(Type::I32, r, b32, zero, neg1, quot, Cond::Eq);
+            ir.gen_movcond(Type::I32, r, b32, neg1, neg_a, r, Cond::Eq);
+            self.gen_set_gpr_sx32(ir, a.rd, r);
+        }
+        true
+    }
+
+    /// 32-bit unsigned division (W-suffix).
+    fn gen_divu_remu_w(
+        &self,
+        ir: &mut Context,
+        a: &ArgsR,
+        want_rem: bool,
+    ) -> bool {
+        let s1 = self.gpr_or_zero(ir, a.rs1);
+        let s2 = self.gpr_or_zero(ir, a.rs2);
+        let a32 = ir.new_temp(Type::I32);
+        ir.gen_extrl_i64_i32(a32, s1);
+        let b32 = ir.new_temp(Type::I32);
+        ir.gen_extrl_i64_i32(b32, s2);
+
+        let zero = ir.new_const(Type::I32, 0);
+        let one = ir.new_const(Type::I32, 1);
+
+        let safe = ir.new_temp(Type::I32);
+        ir.gen_movcond(Type::I32, safe, b32, zero, one, b32, Cond::Eq);
+
+        let quot = ir.new_temp(Type::I32);
+        let rem = ir.new_temp(Type::I32);
+        ir.gen_divu2(Type::I32, quot, rem, a32, zero, safe);
+
+        if want_rem {
+            let r = ir.new_temp(Type::I32);
+            ir.gen_movcond(Type::I32, r, b32, zero, a32, rem, Cond::Eq);
+            self.gen_set_gpr_sx32(ir, a.rd, r);
+        } else {
+            let max = ir.new_const(Type::I32, u32::MAX as u64);
+            let r = ir.new_temp(Type::I32);
+            ir.gen_movcond(Type::I32, r, b32, zero, max, quot, Cond::Eq);
+            self.gen_set_gpr_sx32(ir, a.rd, r);
+        }
+        true
+    }
 
     // -- Branch helper -------------------------------------
 
@@ -455,48 +614,84 @@ impl Decode<Context> for RiscvDisasContext {
         self.gen_shiftw(ir, a, Context::gen_sar)
     }
 
-    // ── RV32M: Multiply / Divide (deferred) ────────────
+    // ── RV32M: Multiply / Divide ────────────────────────
 
-    fn trans_mul(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
-    }
-    fn trans_mulh(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
-    }
-    fn trans_mulhsu(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
-    }
-    fn trans_mulhu(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
-    }
-    fn trans_div(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
-    }
-    fn trans_divu(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
-    }
-    fn trans_rem(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
-    }
-    fn trans_remu(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
+    fn trans_mul(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_arith(ir, a, Context::gen_mul)
     }
 
-    // ── RV64M: W-suffix Mul / Div (deferred) ───────────
+    fn trans_mulh(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        let s1 = self.gpr_or_zero(ir, a.rs1);
+        let s2 = self.gpr_or_zero(ir, a.rs2);
+        let lo = ir.new_temp(Type::I64);
+        let hi = ir.new_temp(Type::I64);
+        ir.gen_muls2(Type::I64, lo, hi, s1, s2);
+        self.gen_set_gpr(ir, a.rd, hi);
+        true
+    }
 
-    fn trans_mulw(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
+    fn trans_mulhsu(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        let s1 = self.gpr_or_zero(ir, a.rs1);
+        let s2 = self.gpr_or_zero(ir, a.rs2);
+        let lo = ir.new_temp(Type::I64);
+        let hi = ir.new_temp(Type::I64);
+        ir.gen_mulu2(Type::I64, lo, hi, s1, s2);
+        // Correction: high -= (s1 >> 63) & s2
+        let c63 = ir.new_const(Type::I64, 63);
+        let sign = ir.new_temp(Type::I64);
+        ir.gen_sar(Type::I64, sign, s1, c63);
+        let adj = ir.new_temp(Type::I64);
+        ir.gen_and(Type::I64, adj, sign, s2);
+        ir.gen_sub(Type::I64, hi, hi, adj);
+        self.gen_set_gpr(ir, a.rd, hi);
+        true
     }
-    fn trans_divw(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
+
+    fn trans_mulhu(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        let s1 = self.gpr_or_zero(ir, a.rs1);
+        let s2 = self.gpr_or_zero(ir, a.rs2);
+        let lo = ir.new_temp(Type::I64);
+        let hi = ir.new_temp(Type::I64);
+        ir.gen_mulu2(Type::I64, lo, hi, s1, s2);
+        self.gen_set_gpr(ir, a.rd, hi);
+        true
     }
-    fn trans_divuw(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
+
+    fn trans_div(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_div_rem(ir, a, false)
     }
-    fn trans_remw(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
+
+    fn trans_divu(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_divu_remu(ir, a, false)
     }
-    fn trans_remuw(&mut self, _ir: &mut Context, _a: &ArgsR) -> bool {
-        false
+
+    fn trans_rem(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_div_rem(ir, a, true)
+    }
+
+    fn trans_remu(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_divu_remu(ir, a, true)
+    }
+
+    // ── RV64M: W-suffix Mul / Div ─────────────────────
+
+    fn trans_mulw(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_arith_w(ir, a, Context::gen_mul)
+    }
+
+    fn trans_divw(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_div_rem_w(ir, a, false)
+    }
+
+    fn trans_divuw(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_divu_remu_w(ir, a, false)
+    }
+
+    fn trans_remw(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_div_rem_w(ir, a, true)
+    }
+
+    fn trans_remuw(&mut self, ir: &mut Context, a: &ArgsR) -> bool {
+        self.gen_divu_remu_w(ir, a, true)
     }
 }
