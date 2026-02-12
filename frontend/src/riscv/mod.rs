@@ -6,7 +6,10 @@ mod insn_decode;
 mod trans;
 
 use crate::{DisasContextBase, DisasJumpType, TranslatorOps};
-use cpu::{gpr_offset, NUM_GPRS, PC_OFFSET};
+use cpu::{
+    gpr_offset, LOAD_RES_OFFSET, LOAD_VAL_OFFSET, NUM_GPRS,
+    PC_OFFSET,
+};
 use tcg_core::{Context, TempIdx, Type};
 
 // ---------------------------------------------------------------
@@ -23,6 +26,10 @@ pub struct RiscvDisasContext {
     pub gpr: [TempIdx; NUM_GPRS],
     /// IR temp for the guest PC (global).
     pub pc: TempIdx,
+    /// IR temp for LR reservation address (global).
+    pub load_res: TempIdx,
+    /// IR temp for LR loaded value (global).
+    pub load_val: TempIdx,
     /// Raw instruction word being decoded.
     pub opcode: u32,
     /// Length of the current instruction (2 or 4).
@@ -47,6 +54,8 @@ impl RiscvDisasContext {
             env: TempIdx(0),
             gpr: [TempIdx(0); NUM_GPRS],
             pc: TempIdx(0),
+            load_res: TempIdx(0),
+            load_val: TempIdx(0),
             opcode: 0,
             cur_insn_len: 4,
             guest_base,
@@ -96,6 +105,14 @@ impl TranslatorOps for RiscvTranslator {
 
         // Register guest PC as a global.
         ctx.pc = ir.new_global(Type::I64, ctx.env, PC_OFFSET, "pc");
+
+        // Register LR/SC reservation state as globals.
+        ctx.load_res = ir.new_global(
+            Type::I64, ctx.env, LOAD_RES_OFFSET, "load_res",
+        );
+        ctx.load_val = ir.new_global(
+            Type::I64, ctx.env, LOAD_VAL_OFFSET, "load_val",
+        );
     }
 
     fn tb_start(_ctx: &mut RiscvDisasContext, _ir: &mut Context) {

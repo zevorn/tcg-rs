@@ -272,7 +272,7 @@ fn parse_riscv32_decode() {
     let input =
         std::fs::read_to_string("../frontend/src/riscv/insn32.decode").unwrap();
     let p = parse(&input).unwrap();
-    assert_eq!(p.patterns.len(), 65);
+    assert_eq!(p.patterns.len(), 87);
     assert!(p.fields.contains_key("imm_b"));
     assert!(p.fields.contains_key("imm_j"));
     assert!(p.argsets.contains_key("r"));
@@ -651,7 +651,7 @@ fn generate_riscv32_decode() {
     let mut out = Vec::new();
     generate(&input, &mut out).unwrap();
     let code = String::from_utf8(out).unwrap();
-    assert_eq!(code.matches("fn trans_").count(), 65);
+    assert_eq!(code.matches("fn trans_").count(), 87);
     assert!(code.contains("fn trans_lui("));
     assert!(code.contains("fn trans_jal("));
     assert!(code.contains("fn trans_mul("));

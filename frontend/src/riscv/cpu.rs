@@ -18,6 +18,10 @@ pub struct RiscvCpu {
     /// Guest memory base pointer (host address).
     /// Used by generated code to translate guest addresses.
     pub guest_base: u64,
+    /// LR reservation address (-1 = no reservation).
+    pub load_res: u64,
+    /// LR loaded value (for SC comparison).
+    pub load_val: u64,
 }
 
 // Field offsets (bytes) from the start of RiscvCpu.
@@ -34,12 +38,20 @@ pub const PC_OFFSET: i64 = (NUM_GPRS * 8) as i64; // 256
 /// Byte offset of the `guest_base` field.
 pub const GUEST_BASE_OFFSET: i64 = PC_OFFSET + 8; // 264
 
+/// Byte offset of the `load_res` field.
+pub const LOAD_RES_OFFSET: i64 = GUEST_BASE_OFFSET + 8; // 272
+
+/// Byte offset of the `load_val` field.
+pub const LOAD_VAL_OFFSET: i64 = LOAD_RES_OFFSET + 8; // 280
+
 impl RiscvCpu {
     pub fn new() -> Self {
         Self {
             gpr: [0u64; NUM_GPRS],
             pc: 0,
             guest_base: 0,
+            load_res: u64::MAX,
+            load_val: 0,
         }
     }
 }
