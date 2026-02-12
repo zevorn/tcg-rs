@@ -1,5 +1,7 @@
 //! Integration tests for the tcg-exec execution loop.
 
+mod mttcg;
+
 use tcg_backend::X86_64CodeGen;
 use tcg_core::context::Context;
 use tcg_core::tb::{EXCP_EBREAK, EXCP_ECALL};
@@ -209,7 +211,7 @@ fn test_exec_loop_simple() {
 fn test_exec_loop_two_tbs() {
     let (t, env) = run_env(&[addi(1, 0, 10), ecall()], |_| {});
     assert_eq!(t.cpu.gpr[1], 10);
-    assert_eq!(env.tb_store.len(), 1);
+    assert_eq!(env.shared.tb_store.len(), 1);
 }
 
 /// Execute the same TB twice to verify cache hit.
@@ -222,7 +224,7 @@ fn test_exec_loop_cache_hit() {
     let r1 = unsafe { cpu_exec_loop(&mut env, &mut t) };
     assert_eq!(r1, ExitReason::Exit(EXCP_ECALL as usize));
     assert_eq!(t.cpu.gpr[1], 5);
-    assert_eq!(env.tb_store.len(), 1);
+    assert_eq!(env.shared.tb_store.len(), 1);
 
     // Reset PC and x1, run again — should hit cache
     t.cpu.pc = 0;
@@ -230,7 +232,7 @@ fn test_exec_loop_cache_hit() {
     let r2 = unsafe { cpu_exec_loop(&mut env, &mut t) };
     assert_eq!(r2, ExitReason::Exit(EXCP_ECALL as usize));
     assert_eq!(t.cpu.gpr[1], 5);
-    assert_eq!(env.tb_store.len(), 1);
+    assert_eq!(env.shared.tb_store.len(), 1);
 }
 
 /// Loop computing 1+2+...+N.
@@ -322,7 +324,7 @@ fn test_two_sequential_loops() {
     assert_eq!(t.cpu.gpr[1], 7);
     assert_eq!(t.cpu.gpr[2], 3);
     // 3 TBs: PC=0 (loop1), PC=8 (loop2), PC=16 (ecall)
-    assert_eq!(env.tb_store.len(), 3);
+    assert_eq!(env.shared.tb_store.len(), 3);
 }
 
 /// JAL forward skip: jump over dead code.
@@ -347,7 +349,7 @@ fn test_jal_forward_skip() {
     assert_eq!(t.cpu.gpr[1], 1); // not 99
     assert_eq!(t.cpu.gpr[2], 11); // 1 + 10
                                   // TB at PC=0 (addi+jal), TB at PC=12 (addi+ecall)
-    assert_eq!(env.tb_store.len(), 2);
+    assert_eq!(env.shared.tb_store.len(), 2);
 }
 
 /// JAL chain: TB0 → TB1 → TB2 → exit.
@@ -378,7 +380,7 @@ fn test_jal_chain_three_tbs() {
     assert_eq!(t.cpu.gpr[1], 10);
     assert_eq!(t.cpu.gpr[2], 20);
     assert_eq!(t.cpu.gpr[3], 30);
-    assert_eq!(env.tb_store.len(), 3);
+    assert_eq!(env.shared.tb_store.len(), 3);
 }
 
 /// JAL with link: simulate function call.
@@ -416,7 +418,7 @@ fn test_jal_jalr_call_return() {
     assert_eq!(t.cpu.gpr[3], 110); // 10+100
     assert_eq!(t.cpu.gpr[5], 8); // return address
                                  // TBs: PC=0, PC=16, PC=8, PC=12 (or fewer if merged)
-    assert!(env.tb_store.len() >= 3);
+    assert!(env.shared.tb_store.len() >= 3);
 }
 
 /// Conditional path: BEQ selects between two code paths.
@@ -494,7 +496,7 @@ fn test_nested_loop() {
     assert_eq!(t.cpu.gpr[5], 12); // 4 * 3 = 12
                                   // TBs: PC=0 (inner body+branch), PC=12 (reset+outer),
                                   //       PC=24 (ecall)
-    assert_eq!(env.tb_store.len(), 3);
+    assert_eq!(env.shared.tb_store.len(), 3);
 }
 
 /// Larger sum: 1+2+...+1000 = 500500.
@@ -578,7 +580,7 @@ fn test_multi_tb_register_pipeline() {
     assert_eq!(t.cpu.gpr[3], 3);
     assert_eq!(t.cpu.gpr[4], 4);
     assert_eq!(t.cpu.gpr[5], 10); // 1+2+3+4
-    assert_eq!(env.tb_store.len(), 5);
+    assert_eq!(env.shared.tb_store.len(), 5);
 }
 
 /// Bit manipulation loop: shift-and-count set bits.
@@ -710,5 +712,5 @@ fn test_multi_branch_targets() {
     assert_eq!(t.cpu.gpr[2], 1);
     assert_eq!(t.cpu.gpr[5], 5); // iterations 5..9
                                  // Multiple TBs from different branch targets
-    assert!(env.tb_store.len() >= 4);
+    assert!(env.shared.tb_store.len() >= 4);
 }
