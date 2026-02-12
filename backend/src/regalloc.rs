@@ -59,15 +59,16 @@ fn evict_reg(
         t.mem_coherent = true;
         state.free_reg(reg);
     } else {
-        // Move local to another free register
+        // Local temp: spill to stack frame.
         let ty = temp.ty;
-        let free = state.free_regs.subtract(RegSet::from_raw(1u64 << reg));
-        let dst = free.first().expect("no free register for eviction");
-        backend.tcg_out_mov(buf, ty, dst, reg);
+        let offset = ctx.alloc_temp_frame(tidx);
+        let frame_reg = ctx.frame_reg.unwrap();
+        backend.tcg_out_st(buf, ty, reg, frame_reg, offset);
         state.free_reg(reg);
-        state.assign(dst, tidx);
         let t = ctx.temp_mut(tidx);
-        t.reg = Some(dst);
+        t.val_type = TempVal::Mem;
+        t.reg = None;
+        t.mem_coherent = true;
     }
 }
 
@@ -159,13 +160,19 @@ fn temp_load_to(
             let ty = temp.ty;
             let mem_base = temp.mem_base;
             let mem_offset = temp.mem_offset;
+            let mem_allocated = temp.mem_allocated;
             let reg = reg_alloc(
                 ctx, state, backend, buf, required, forbidden, preferred,
             );
             state.assign(reg, tidx);
             if let Some(base_idx) = mem_base {
+                // Global temp: load from [env + offset]
                 let base_reg = ctx.temp(base_idx).reg.unwrap();
                 backend.tcg_out_ld(buf, ty, reg, base_reg, mem_offset);
+            } else if mem_allocated {
+                // Local temp: load from [frame_reg + offset]
+                let frame_reg = ctx.frame_reg.unwrap();
+                backend.tcg_out_ld(buf, ty, reg, frame_reg, mem_offset);
             }
             let t = ctx.temp_mut(tidx);
             t.val_type = TempVal::Reg;
@@ -179,7 +186,7 @@ fn temp_load_to(
     }
 }
 
-/// Sync a temp back to memory (for globals).
+/// Sync a temp back to memory (globals and spilled locals).
 fn temp_sync(
     ctx: &Context,
     backend: &impl HostCodeGen,
@@ -190,9 +197,15 @@ fn temp_sync(
     if temp.mem_coherent {
         return;
     }
-    if let (Some(reg), Some(base_idx)) = (temp.reg, temp.mem_base) {
+    let Some(reg) = temp.reg else { return };
+    if let Some(base_idx) = temp.mem_base {
+        // Global temp
         let base_reg = ctx.temp(base_idx).reg.unwrap();
         backend.tcg_out_st(buf, temp.ty, reg, base_reg, temp.mem_offset);
+    } else if temp.mem_allocated {
+        // Local temp with allocated stack slot
+        let frame_reg = ctx.frame_reg.unwrap();
+        backend.tcg_out_st(buf, temp.ty, reg, frame_reg, temp.mem_offset);
     }
 }
 
