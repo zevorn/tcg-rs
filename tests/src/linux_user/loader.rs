@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use tcg_linux_user::elf::{
-    AT_EXECFN, AT_NULL, AT_PHDR, Elf64Ehdr, Elf64Phdr,
-    EM_RISCV, ET_EXEC, PF_R, PF_X, PT_LOAD,
+    Elf64Ehdr, Elf64Phdr, AT_EXECFN, AT_NULL, AT_PHDR, EM_RISCV, ET_EXEC, PF_R,
+    PF_X, PT_LOAD,
 };
 use tcg_linux_user::guest_space::{
     GuestSpace, GUEST_STACK_SIZE, GUEST_STACK_TOP,

@@ -197,7 +197,11 @@ fn fmin_f32(env: &mut RiscvCpu, a: u32, b: u32) -> u32 {
         }
         return a;
     }
-    if af < bf { a } else { b }
+    if af < bf {
+        a
+    } else {
+        b
+    }
 }
 
 fn fmax_f32(env: &mut RiscvCpu, a: u32, b: u32) -> u32 {
@@ -220,7 +224,11 @@ fn fmax_f32(env: &mut RiscvCpu, a: u32, b: u32) -> u32 {
         }
         return a;
     }
-    if af > bf { a } else { b }
+    if af > bf {
+        a
+    } else {
+        b
+    }
 }
 
 fn fmin_f64(env: &mut RiscvCpu, a: u64, b: u64) -> u64 {
@@ -243,7 +251,11 @@ fn fmin_f64(env: &mut RiscvCpu, a: u64, b: u64) -> u64 {
         }
         return a;
     }
-    if af < bf { a } else { b }
+    if af < bf {
+        a
+    } else {
+        b
+    }
 }
 
 fn fmax_f64(env: &mut RiscvCpu, a: u64, b: u64) -> u64 {
@@ -266,7 +278,11 @@ fn fmax_f64(env: &mut RiscvCpu, a: u64, b: u64) -> u64 {
         }
         return a;
     }
-    if af > bf { a } else { b }
+    if af > bf {
+        a
+    } else {
+        b
+    }
 }
 
 fn fclass_f32(bits: u32) -> u64 {
@@ -398,11 +414,7 @@ pub extern "C" fn helper_fdiv_s(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fsqrt_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fsqrt_s(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f32(env, a);
     let res = with_fenv(env, rm, || unsafe { sqrtf(af) });
@@ -474,11 +486,7 @@ pub extern "C" fn helper_fnmadd_s(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fsgnj_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fsgnj_s(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     let ab = read_f32_bits(env, a);
     let bb = read_f32_bits(env, b);
@@ -488,11 +496,7 @@ pub extern "C" fn helper_fsgnj_s(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fsgnjn_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fsgnjn_s(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     let ab = read_f32_bits(env, a);
     let bb = read_f32_bits(env, b);
@@ -502,11 +506,7 @@ pub extern "C" fn helper_fsgnjn_s(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fsgnjx_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fsgnjx_s(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     let ab = read_f32_bits(env, a);
     let bb = read_f32_bits(env, b);
@@ -516,11 +516,7 @@ pub extern "C" fn helper_fsgnjx_s(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fmin_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fmin_s(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     let ab = read_f32_bits(env, a);
     let bb = read_f32_bits(env, b);
@@ -528,11 +524,7 @@ pub extern "C" fn helper_fmin_s(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fmax_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fmax_s(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     let ab = read_f32_bits(env, a);
     let bb = read_f32_bits(env, b);
@@ -540,11 +532,7 @@ pub extern "C" fn helper_fmax_s(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_feq_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_feq_s(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     let ab = read_f32_bits(env, a);
     let bb = read_f32_bits(env, b);
@@ -558,11 +546,7 @@ pub extern "C" fn helper_feq_s(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_flt_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_flt_s(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     let ab = read_f32_bits(env, a);
     let bb = read_f32_bits(env, b);
@@ -574,11 +558,7 @@ pub extern "C" fn helper_flt_s(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fle_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fle_s(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     let ab = read_f32_bits(env, a);
     let bb = read_f32_bits(env, b);
@@ -597,88 +577,56 @@ pub extern "C" fn helper_fclass_s(env: *mut RiscvCpu, a: u64) -> u64 {
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_w_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_w_s(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f32(env, a);
     fcvt_i32(env, af as f64, rm)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_wu_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_wu_s(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f32(env, a);
     fcvt_u32(env, af as f64, rm)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_l_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_l_s(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f32(env, a);
     fcvt_i64(env, af as f64, rm)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_lu_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_lu_s(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f32(env, a);
     fcvt_u64(env, af as f64, rm)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_s_w(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_s_w(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let res = with_fenv(env, rm, || a as i32 as f32);
     nanbox_f32(res.to_bits())
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_s_wu(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_s_wu(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let res = with_fenv(env, rm, || a as u32 as f32);
     nanbox_f32(res.to_bits())
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_s_l(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_s_l(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let res = with_fenv(env, rm, || a as i64 as f32);
     nanbox_f32(res.to_bits())
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_s_lu(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_s_lu(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let res = with_fenv(env, rm, || a as f32);
     nanbox_f32(res.to_bits())
@@ -741,11 +689,7 @@ pub extern "C" fn helper_fdiv_d(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fsqrt_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fsqrt_d(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f64(a);
     let res = with_fenv(env, rm, || unsafe { sqrt(af) });
@@ -817,61 +761,37 @@ pub extern "C" fn helper_fnmadd_d(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fsgnj_d(
-    _env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fsgnj_d(_env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let sign = b & (1u64 << 63);
     (a & !(1u64 << 63)) | sign
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fsgnjn_d(
-    _env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fsgnjn_d(_env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let sign = (!b) & (1u64 << 63);
     (a & !(1u64 << 63)) | sign
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fsgnjx_d(
-    _env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fsgnjx_d(_env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let sign = (a ^ b) & (1u64 << 63);
     (a & !(1u64 << 63)) | sign
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fmin_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fmin_d(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     fmin_f64(env, a, b)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fmax_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fmax_d(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     fmax_f64(env, a, b)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_feq_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_feq_d(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     if is_snan_f64(a) || is_snan_f64(b) {
         set_invalid(env);
@@ -883,11 +803,7 @@ pub extern "C" fn helper_feq_d(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_flt_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_flt_d(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     if is_nan_f64(a) || is_nan_f64(b) {
         set_invalid(env);
@@ -897,11 +813,7 @@ pub extern "C" fn helper_flt_d(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fle_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    b: u64,
-) -> u64 {
+pub extern "C" fn helper_fle_d(env: *mut RiscvCpu, a: u64, b: u64) -> u64 {
     let env = unsafe { &mut *env };
     if is_nan_f64(a) || is_nan_f64(b) {
         set_invalid(env);
@@ -917,99 +829,63 @@ pub extern "C" fn helper_fclass_d(env: *mut RiscvCpu, a: u64) -> u64 {
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_w_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_w_d(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f64(a);
     fcvt_i32(env, af, rm)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_wu_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_wu_d(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f64(a);
     fcvt_u32(env, af, rm)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_l_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_l_d(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f64(a);
     fcvt_i64(env, af, rm)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_lu_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_lu_d(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f64(a);
     fcvt_u64(env, af, rm)
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_d_w(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_d_w(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let res = with_fenv(env, rm, || a as i32 as f64);
     res.to_bits()
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_d_wu(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_d_wu(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let res = with_fenv(env, rm, || a as u32 as f64);
     res.to_bits()
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_d_l(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_d_l(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let res = with_fenv(env, rm, || a as i64 as f64);
     res.to_bits()
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_d_lu(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_d_lu(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let res = with_fenv(env, rm, || a as f64);
     res.to_bits()
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_s_d(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_s_d(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f64(a);
     let res = with_fenv(env, rm, || af as f32);
@@ -1017,11 +893,7 @@ pub extern "C" fn helper_fcvt_s_d(
 }
 
 #[no_mangle]
-pub extern "C" fn helper_fcvt_d_s(
-    env: *mut RiscvCpu,
-    a: u64,
-    rm: u64,
-) -> u64 {
+pub extern "C" fn helper_fcvt_d_s(env: *mut RiscvCpu, a: u64, rm: u64) -> u64 {
     let env = unsafe { &mut *env };
     let af = read_f32(env, a) as f64;
     let res = with_fenv(env, rm, || af);
@@ -1051,8 +923,7 @@ fn fcvt_i32(env: &mut RiscvCpu, val: f64, rm: u64) -> u64 {
     let (rounded, flags) = with_fenv_flags(env, rm, || unsafe { rint(val) });
     if flags & FE_INVALID != 0
         || !rounded.is_finite()
-        || !(I32_MIN_F64..I32_MAX_PLUS1_F64)
-            .contains(&rounded)
+        || !(I32_MIN_F64..I32_MAX_PLUS1_F64).contains(&rounded)
     {
         set_invalid(env);
         return if val.is_sign_negative() {
@@ -1072,7 +943,11 @@ fn fcvt_u32(env: &mut RiscvCpu, val: f64, rm: u64) -> u64 {
     }
     if val.is_infinite() {
         set_invalid(env);
-        return if val.is_sign_negative() { 0 } else { u32::MAX as u64 };
+        return if val.is_sign_negative() {
+            0
+        } else {
+            u32::MAX as u64
+        };
     }
     if val < 0.0 {
         set_invalid(env);
@@ -1106,8 +981,7 @@ fn fcvt_i64(env: &mut RiscvCpu, val: f64, rm: u64) -> u64 {
     let (rounded, flags) = with_fenv_flags(env, rm, || unsafe { rint(val) });
     if flags & FE_INVALID != 0
         || !rounded.is_finite()
-        || !(I64_MIN_F64..I64_MAX_PLUS1_F64)
-            .contains(&rounded)
+        || !(I64_MIN_F64..I64_MAX_PLUS1_F64).contains(&rounded)
     {
         set_invalid(env);
         return if val.is_sign_negative() {
@@ -1156,7 +1030,8 @@ pub extern "C" fn helper_fcsr_read(env: *mut RiscvCpu) -> u64 {
 #[no_mangle]
 pub extern "C" fn helper_fcsr_write(env: *mut RiscvCpu, val: u64) -> u64 {
     let env = unsafe { &mut *env };
-    let old = (env.fflags & FFLAGS_MASK) | ((env.frm & FRM_MASK) << FCSR_RD_SHIFT);
+    let old =
+        (env.fflags & FFLAGS_MASK) | ((env.frm & FRM_MASK) << FCSR_RD_SHIFT);
     env.fflags = val & FFLAGS_MASK;
     env.frm = (val >> FCSR_RD_SHIFT) & FRM_MASK;
     old
