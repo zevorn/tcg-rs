@@ -19,6 +19,12 @@ const GUEST_TESTS: &[GuestTest] = &[
         elf: "hello_printf",
         expected_stdout: "Hello, World!\n",
     },
+    GuestTest {
+        name: "hello_float",
+        elf: "hello_float",
+        expected_stdout: "a=1.50 b=2.25 c=3.875000 \
+            d=1.291667 f=3.875 i=3 u=4\n",
+    },
 ];
 
 fn has_riscv_gcc() -> bool {
@@ -95,6 +101,12 @@ fn guest_hello() {
 fn guest_hello_printf() {
     ensure_built();
     assert_guest(&GUEST_TESTS[1]);
+}
+
+#[test]
+fn guest_hello_float() {
+    ensure_built();
+    assert_guest(&GUEST_TESTS[2]);
 }
 
 #[test]

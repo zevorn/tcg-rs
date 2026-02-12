@@ -947,6 +947,89 @@ fn c_ebreak() -> u16 {
     rv_cr(0b1001, 0, 0, 0b10)
 }
 
+// ── RV32F/RV64F instruction encoders ────────────────────────
+
+const OP_FP: u32 = 0b1010011;
+const OP_FMADD: u32 = 0b1000011;
+const OP_FMSUB: u32 = 0b1000111;
+const OP_FNMSUB: u32 = 0b1001011;
+const OP_FNMADD: u32 = 0b1001111;
+
+/// R4-type FP encoding (FMA family).
+fn rv_r4(
+    rs3: u32,
+    fmt: u32,
+    rs2: u32,
+    rs1: u32,
+    rm: u32,
+    rd: u32,
+    op: u32,
+) -> u32 {
+    (rs3 << 27)
+        | (fmt << 25)
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | (rm << 12)
+        | (rd << 7)
+        | op
+}
+
+fn fmadd_s(
+    rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32,
+) -> u32 {
+    rv_r4(rs3, 0b00, rs2, rs1, rm, rd, OP_FMADD)
+}
+fn fmsub_s(
+    rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32,
+) -> u32 {
+    rv_r4(rs3, 0b00, rs2, rs1, rm, rd, OP_FMSUB)
+}
+fn fnmsub_s(
+    rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32,
+) -> u32 {
+    rv_r4(rs3, 0b00, rs2, rs1, rm, rd, OP_FNMSUB)
+}
+fn fnmadd_s(
+    rd: u32, rs1: u32, rs2: u32, rs3: u32, rm: u32,
+) -> u32 {
+    rv_r4(rs3, 0b00, rs2, rs1, rm, rd, OP_FNMADD)
+}
+
+fn fadd_s(rd: u32, rs1: u32, rs2: u32, rm: u32) -> u32 {
+    rv_r(0b0000000, rs2, rs1, rm, rd, OP_FP)
+}
+fn fsub_s(rd: u32, rs1: u32, rs2: u32, rm: u32) -> u32 {
+    rv_r(0b0000100, rs2, rs1, rm, rd, OP_FP)
+}
+fn fmul_s(rd: u32, rs1: u32, rs2: u32, rm: u32) -> u32 {
+    rv_r(0b0001000, rs2, rs1, rm, rd, OP_FP)
+}
+
+fn feq_s(rd: u32, rs1: u32, rs2: u32) -> u32 {
+    rv_r(0b1010000, rs2, rs1, 0b010, rd, OP_FP)
+}
+fn flt_s(rd: u32, rs1: u32, rs2: u32) -> u32 {
+    rv_r(0b1010000, rs2, rs1, 0b001, rd, OP_FP)
+}
+fn fle_s(rd: u32, rs1: u32, rs2: u32) -> u32 {
+    rv_r(0b1010000, rs2, rs1, 0b000, rd, OP_FP)
+}
+
+/// FMV.X.W rd, rs1 — move f[rs1] low 32 bits to x[rd]
+fn fmv_x_w(rd: u32, rs1: u32) -> u32 {
+    rv_r(0b1110000, 0, rs1, 0b000, rd, OP_FP)
+}
+
+/// FMV.W.X rd, rs1 — move x[rs1] to f[rd] with NaN-boxing
+fn fmv_w_x(rd: u32, rs1: u32) -> u32 {
+    rv_r(0b1111000, 0, rs1, 0b000, rd, OP_FP)
+}
+
+/// FCVT.S.W rd, rs1, rm — convert signed i32 to f32
+fn fcvt_s_w(rd: u32, rs1: u32, rm: u32) -> u32 {
+    rv_r(0b1101000, 0, rs1, rm, rd, OP_FP)
+}
+
 // ── Byte-level test runner ───────────────────────────────────
 
 /// Count instructions in a raw byte stream (mixed 16/32-bit).
@@ -1138,4 +1221,197 @@ fn test_mixed_32_16() {
     code.extend_from_slice(&insn16.to_le_bytes());
     run_rv_bytes(&mut cpu, &code);
     assert_eq!(cpu.gpr[1], 15);
+}
+
+// ── NaN-boxing helper ───────────────────────────────────────
+
+/// NaN-box a 32-bit float value for FPR storage.
+fn nanbox(bits: u32) -> u64 {
+    0xffff_ffff_0000_0000u64 | (bits as u64)
+}
+
+// ── RV32F: FADD.S (exercises Call regalloc path) ────────────
+
+#[test]
+fn test_fadd_s() {
+    let mut cpu = RiscvCpu::new();
+    // f1 = 1.0f, f2 = 2.0f
+    cpu.fpr[1] = nanbox(0x3f80_0000); // 1.0f
+    cpu.fpr[2] = nanbox(0x4000_0000); // 2.0f
+    // FADD.S f3, f1, f2, rm=0 (RNE)
+    run_rv(&mut cpu, fadd_s(3, 1, 2, 0));
+    assert_eq!(cpu.fpr[3], nanbox(0x4040_0000)); // 3.0f
+}
+
+#[test]
+fn test_fsub_s() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x4040_0000); // 3.0f
+    cpu.fpr[2] = nanbox(0x3f80_0000); // 1.0f
+    run_rv(&mut cpu, fsub_s(3, 1, 2, 0));
+    assert_eq!(cpu.fpr[3], nanbox(0x4000_0000)); // 2.0f
+}
+
+#[test]
+fn test_fmul_s() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x4000_0000); // 2.0f
+    cpu.fpr[2] = nanbox(0x4040_0000); // 3.0f
+    run_rv(&mut cpu, fmul_s(3, 1, 2, 0));
+    assert_eq!(cpu.fpr[3], nanbox(0x40c0_0000)); // 6.0f
+}
+
+// ── RV32F: FMA family (FNMSUB/FNMADD fix) ──────────────────
+//
+// a=2.0, b=3.0, c=1.0:
+//   FMADD:  fma(a,b,c)    =  2*3+1 =  7.0
+//   FMSUB:  fma(a,b,-c)   =  2*3-1 =  5.0
+//   FNMSUB: fma(-a,b,c)   = -2*3+1 = -5.0
+//   FNMADD: fma(-a,b,-c)  = -2*3-1 = -7.0
+
+#[test]
+fn test_fmadd_s() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x4000_0000); // 2.0f
+    cpu.fpr[2] = nanbox(0x4040_0000); // 3.0f
+    cpu.fpr[3] = nanbox(0x3f80_0000); // 1.0f
+    run_rv(&mut cpu, fmadd_s(4, 1, 2, 3, 0));
+    assert_eq!(cpu.fpr[4], nanbox(0x40e0_0000)); // 7.0f
+}
+
+#[test]
+fn test_fmsub_s() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x4000_0000); // 2.0f
+    cpu.fpr[2] = nanbox(0x4040_0000); // 3.0f
+    cpu.fpr[3] = nanbox(0x3f80_0000); // 1.0f
+    run_rv(&mut cpu, fmsub_s(4, 1, 2, 3, 0));
+    assert_eq!(cpu.fpr[4], nanbox(0x40a0_0000)); // 5.0f
+}
+
+#[test]
+fn test_fnmsub_s() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x4000_0000); // 2.0f
+    cpu.fpr[2] = nanbox(0x4040_0000); // 3.0f
+    cpu.fpr[3] = nanbox(0x3f80_0000); // 1.0f
+    // FNMSUB: fma(-a, b, c) = -2*3 + 1 = -5.0
+    run_rv(&mut cpu, fnmsub_s(4, 1, 2, 3, 0));
+    assert_eq!(cpu.fpr[4], nanbox(0xc0a0_0000)); // -5.0f
+}
+
+#[test]
+fn test_fnmadd_s() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x4000_0000); // 2.0f
+    cpu.fpr[2] = nanbox(0x4040_0000); // 3.0f
+    cpu.fpr[3] = nanbox(0x3f80_0000); // 1.0f
+    // FNMADD: fma(-a, b, -c) = -2*3 - 1 = -7.0
+    run_rv(&mut cpu, fnmadd_s(4, 1, 2, 3, 0));
+    assert_eq!(cpu.fpr[4], nanbox(0xc0e0_0000)); // -7.0f
+}
+
+// ── RV32F: FMV.W.X NaN-boxing ──────────────────────────────
+
+#[test]
+fn test_fmv_w_x_nanbox() {
+    let mut cpu = RiscvCpu::new();
+    // x1 = 0xBF800000 (-1.0f, bit 31 set)
+    cpu.gpr[1] = 0xBF80_0000;
+    run_rv(&mut cpu, fmv_w_x(1, 1));
+    // Must be NaN-boxed: upper 32 bits all-1s
+    assert_eq!(cpu.fpr[1], nanbox(0xBF80_0000));
+}
+
+#[test]
+fn test_fmv_w_x_positive() {
+    let mut cpu = RiscvCpu::new();
+    // x1 = 0x3F800000 (+1.0f, bit 31 clear)
+    cpu.gpr[1] = 0x3F80_0000;
+    run_rv(&mut cpu, fmv_w_x(2, 1));
+    assert_eq!(cpu.fpr[2], nanbox(0x3F80_0000));
+}
+
+#[test]
+fn test_fmv_x_w() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0xBF80_0000); // -1.0f
+    run_rv(&mut cpu, fmv_x_w(3, 1));
+    // Sign-extended 32→64: 0xBF800000 → 0xFFFFFFFF_BF800000
+    assert_eq!(cpu.gpr[3], 0xFFFF_FFFF_BF80_0000u64);
+}
+
+// ── RV32F: FEQ/FLT/FLE (read-only, result to GPR) ──────────
+
+#[test]
+fn test_feq_s_equal() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x3f80_0000); // 1.0f
+    cpu.fpr[2] = nanbox(0x3f80_0000); // 1.0f
+    run_rv(&mut cpu, feq_s(3, 1, 2));
+    assert_eq!(cpu.gpr[3], 1);
+}
+
+#[test]
+fn test_feq_s_not_equal() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x3f80_0000); // 1.0f
+    cpu.fpr[2] = nanbox(0x4000_0000); // 2.0f
+    run_rv(&mut cpu, feq_s(3, 1, 2));
+    assert_eq!(cpu.gpr[3], 0);
+}
+
+#[test]
+fn test_flt_s_true() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x3f80_0000); // 1.0f
+    cpu.fpr[2] = nanbox(0x4000_0000); // 2.0f
+    run_rv(&mut cpu, flt_s(3, 1, 2));
+    assert_eq!(cpu.gpr[3], 1);
+}
+
+#[test]
+fn test_flt_s_false() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x4000_0000); // 2.0f
+    cpu.fpr[2] = nanbox(0x3f80_0000); // 1.0f
+    run_rv(&mut cpu, flt_s(3, 1, 2));
+    assert_eq!(cpu.gpr[3], 0);
+}
+
+#[test]
+fn test_fle_s_equal() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x3f80_0000); // 1.0f
+    cpu.fpr[2] = nanbox(0x3f80_0000); // 1.0f
+    run_rv(&mut cpu, fle_s(3, 1, 2));
+    assert_eq!(cpu.gpr[3], 1);
+}
+
+#[test]
+fn test_fle_s_less() {
+    let mut cpu = RiscvCpu::new();
+    cpu.fpr[1] = nanbox(0x3f80_0000); // 1.0f
+    cpu.fpr[2] = nanbox(0x4000_0000); // 2.0f
+    run_rv(&mut cpu, fle_s(3, 1, 2));
+    assert_eq!(cpu.gpr[3], 1);
+}
+
+// ── RV32F: FCVT.S.W + FADD.S sequence ──────────────────────
+// Exercises multiple Call ops in one TB (regalloc stress).
+
+#[test]
+fn test_fcvt_fadd_sequence() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[1] = 10;
+    cpu.gpr[2] = 20;
+    // FCVT.S.W f1, x1, rm=0  → f1 = 10.0f
+    // FCVT.S.W f2, x2, rm=0  → f2 = 20.0f
+    // FADD.S   f3, f1, f2, rm=0 → f3 = 30.0f
+    run_rv_insns(
+        &mut cpu,
+        &[fcvt_s_w(1, 1, 0), fcvt_s_w(2, 2, 0), fadd_s(3, 1, 2, 0)],
+    );
+    // 30.0f = 0x41F00000
+    assert_eq!(cpu.fpr[3], nanbox(0x41f0_0000));
 }

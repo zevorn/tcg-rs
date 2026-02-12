@@ -17,7 +17,7 @@ BARE_SRCS   = riscv/hello.c
 
 # Programs linked with static glibc.
 LIBC_CFLAGS = -static -march=rv64gc -mabi=lp64d -O2
-LIBC_SRCS   = riscv/hello_printf.c
+LIBC_SRCS   = riscv/hello_printf.c riscv/hello_float.c
 
 BARE_BINS = $(patsubst riscv/%.c,$(BUILDDIR)/%,$(BARE_SRCS))
 LIBC_BINS = $(patsubst riscv/%.c,$(BUILDDIR)/%,$(LIBC_SRCS))
