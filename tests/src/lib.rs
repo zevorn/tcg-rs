@@ -10,3 +10,5 @@ mod exec;
 mod frontend;
 #[cfg(test)]
 mod integration;
+#[cfg(test)]
+mod linux_user;

@@ -9,3 +9,5 @@ tcg-backend = { path = "../backend" }
 tcg-frontend = { path = "../frontend" }
 tcg-exec = { path = "../exec" }
 decodetree = { path = "../decodetree" }
+tcg-linux-user = { path = "../linux-user" }
+libc = "0.2"
