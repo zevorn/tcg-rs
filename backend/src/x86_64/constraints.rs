@@ -163,6 +163,24 @@ pub fn op_constraint(opc: Opcode) -> &'static OpConstraint {
             static C: OpConstraint = o0_i2(R, R);
             &C
         }
+        // -- Call: output + 6 inputs --
+        Opcode::Call => {
+            const CALL_C: OpConstraint = OpConstraint {
+                args: [
+                    fixed(Reg::Rax as u8),
+                    fixed(Reg::Rdi as u8),
+                    fixed(Reg::Rsi as u8),
+                    fixed(Reg::Rdx as u8),
+                    fixed(Reg::Rcx as u8),
+                    fixed(Reg::R8 as u8),
+                    fixed(Reg::R9 as u8),
+                    ArgConstraint::UNUSED,
+                    ArgConstraint::UNUSED,
+                    ArgConstraint::UNUSED,
+                ],
+            };
+            &CALL_C
+        }
         _ => &OpConstraint::EMPTY,
     }
 }

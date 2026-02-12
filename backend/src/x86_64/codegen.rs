@@ -19,13 +19,13 @@ impl HostCodeGen for X86_64CodeGen {
         }
         // mov TCG_AREG0 (rbp), rdi
         emit_mov_rr(buf, true, Reg::Rbp, CALL_ARG_REGS[0]);
-        // Load guest_base into R14: mov r14, [rbp+264]
+        // Load guest_base into R14: mov r14, [rbp+520]
         emit_load(
             buf,
             true,
             Reg::R14,
             Reg::Rbp,
-            264, // GUEST_BASE_OFFSET
+            520, // GUEST_BASE_OFFSET
         );
         // sub rsp, STACK_ADDEND
         emit_arith_ri(buf, ArithOp::Sub, true, Reg::Rsp, STACK_ADDEND as i32);
@@ -635,6 +635,13 @@ impl HostCodeGen for X86_64CodeGen {
                     }
                     _ => unreachable!(),
                 }
+            }
+            Opcode::Call => {
+                let func =
+                    (cargs[1] as u64) << 32
+                        | (cargs[0] as u64);
+                emit_mov_ri(buf, true, Reg::R11, func);
+                emit_call_reg(buf, Reg::R11);
             }
             _ => {
                 panic!("tcg_out_op: unhandled {:?}", op.opc,);

@@ -226,6 +226,162 @@ fn sync_globals(
     }
 }
 
+/// Dedicated register allocation for Call ops.
+///
+/// Unlike `regalloc_op`, this function:
+/// - Syncs globals before the call (helper reads CPU state)
+/// - Loads inputs into fixed regs without altering temp state
+/// - Clobbers caller-saved regs after the call
+/// - Restores Fixed temps to their original registers
+///
+/// Mirrors QEMU's `tcg_reg_alloc_call()`.
+#[allow(clippy::needless_range_loop)]
+fn regalloc_call(
+    ctx: &mut Context,
+    state: &mut RegAllocState,
+    backend: &impl HostCodeGen,
+    buf: &mut CodeBuffer,
+    op: &tcg_core::Op,
+    ct: &OpConstraint,
+) {
+    let def = &OPCODE_DEFS[op.opc as usize];
+    let nb_oargs = def.nb_oargs as usize;
+    let nb_iargs = def.nb_iargs as usize;
+    let nb_cargs = def.nb_cargs as usize;
+    let life = op.life;
+
+    // x86-64 System V caller-saved registers.
+    const CALLER_SAVED: [u8; 9] =
+        [0, 1, 2, 6, 7, 8, 9, 10, 11];
+
+    // 1. Sync all globals to memory (helper reads
+    //    CPU state via env pointer).
+    sync_globals(ctx, backend, buf);
+
+    // 2. Spill any live local temps in caller-saved
+    //    regs (they will be clobbered by the call).
+    for &reg in &CALLER_SAVED {
+        if let Some(tidx) = state.reg_to_temp[reg as usize]
+        {
+            let temp = ctx.temp(tidx);
+            if !temp.is_global_or_fixed() {
+                evict_reg(
+                    ctx, state, backend, buf, reg,
+                );
+            }
+        }
+    }
+
+    // 3. Load each input into its fixed register.
+    //    Emit MOV/LOAD/MOVI directly without changing
+    //    the source temp's state.
+    let mut i_regs = [0u8; 10];
+    for i in 0..nb_iargs {
+        let tidx = op.args[nb_oargs + i];
+        let target = ct.args[nb_oargs + i]
+            .regs
+            .first()
+            .unwrap();
+        let temp = ctx.temp(tidx);
+        match temp.val_type {
+            TempVal::Reg => {
+                let src = temp.reg.unwrap();
+                if src != target {
+                    backend.tcg_out_mov(
+                        buf, temp.ty, target, src,
+                    );
+                }
+            }
+            TempVal::Const => {
+                backend.tcg_out_movi(
+                    buf, temp.ty, target, temp.val,
+                );
+            }
+            TempVal::Mem => {
+                if let Some(base_idx) = temp.mem_base {
+                    let base_reg =
+                        ctx.temp(base_idx).reg.unwrap();
+                    backend.tcg_out_ld(
+                        buf,
+                        temp.ty,
+                        target,
+                        base_reg,
+                        temp.mem_offset,
+                    );
+                } else if temp.mem_allocated {
+                    let frame_reg =
+                        ctx.frame_reg.unwrap();
+                    backend.tcg_out_ld(
+                        buf,
+                        temp.ty,
+                        target,
+                        frame_reg,
+                        temp.mem_offset,
+                    );
+                }
+            }
+            TempVal::Dead => {
+                // Dead input — load zero.
+                backend.tcg_out_movi(
+                    buf, temp.ty, target, 0,
+                );
+            }
+        }
+        i_regs[i] = target;
+    }
+
+    // 4. Free dead inputs.
+    for i in 0..nb_iargs {
+        if life.is_dead((nb_oargs + i) as u32) {
+            let tidx = op.args[nb_oargs + i];
+            temp_dead_input(ctx, state, tidx);
+        }
+    }
+
+    // 5. Clobber all caller-saved registers.
+    for &reg in &CALLER_SAVED {
+        if let Some(tidx) = state.reg_to_temp[reg as usize]
+        {
+            let temp = ctx.temp(tidx);
+            if temp.is_global_or_fixed() {
+                let t = ctx.temp_mut(tidx);
+                t.val_type = TempVal::Mem;
+                t.reg = None;
+                t.mem_coherent = true;
+            }
+            state.free_reg(reg);
+        }
+    }
+
+    // 6. Collect cargs and emit call.
+    let cstart = nb_oargs + nb_iargs;
+    let cargs: Vec<u32> = (0..nb_cargs)
+        .map(|i| op.args[cstart + i].0)
+        .collect();
+    let out_reg = ct.args[0].regs.first().unwrap();
+    backend.tcg_out_op(
+        buf,
+        ctx,
+        op,
+        &[out_reg],
+        &i_regs[..nb_iargs],
+        &cargs,
+    );
+
+    // 7. Assign output to return register (RAX).
+    let dst_tidx = op.args[0];
+    state.assign(out_reg, dst_tidx);
+    let t = ctx.temp_mut(dst_tidx);
+    t.val_type = TempVal::Reg;
+    t.reg = Some(out_reg);
+    t.mem_coherent = false;
+
+    // 8. Free dead output.
+    if life.is_dead(0) {
+        temp_dead(ctx, state, dst_tidx);
+    }
+}
+
 /// Free a temp's register if it's dead after this op.
 fn temp_dead(ctx: &mut Context, state: &mut RegAllocState, tidx: TempIdx) {
     let temp = ctx.temp(tidx);
@@ -281,6 +437,10 @@ fn regalloc_op(
     let mut i_allocated = RegSet::EMPTY;
     // Track which aliased inputs can be reused for output
     let mut i_reusable = [false; 10];
+    // Track Fixed temps moved away from their home register
+    // so we can restore them after the op.
+    let mut fixed_moves: Vec<(TempIdx, u8, u8)> =
+        Vec::new();
 
     // 1. Process inputs
     for i in 0..nb_iargs {
@@ -290,6 +450,8 @@ fn regalloc_op(
         let is_dead = life.is_dead((nb_oargs + i) as u32);
         let temp = ctx.temp(tidx);
         let is_readonly = temp.is_global_or_fixed() || temp.is_const();
+        let orig_fixed =
+            if temp.is_fixed() { temp.reg } else { None };
 
         if arg_ct.ialias && is_dead && !is_readonly {
             // Can reuse this input's register for the
@@ -321,6 +483,18 @@ fn regalloc_op(
             );
             i_regs[i] = reg;
             i_allocated = i_allocated.set(reg);
+        }
+
+        // Record if a Fixed temp was moved away from
+        // its home register.
+        if let Some(orig_reg) = orig_fixed {
+            if let Some(cur) = ctx.temp(tidx).reg {
+                if cur != orig_reg {
+                    fixed_moves.push(
+                        (tidx, orig_reg, cur),
+                    );
+                }
+            }
         }
     }
 
@@ -446,7 +620,22 @@ fn regalloc_op(
         }
     }
 
-    // 6. Free dead outputs
+    // 6. Restore Fixed temps to their home registers.
+    for (tidx, orig_reg, moved_reg) in fixed_moves {
+        if ctx.temp(tidx).is_fixed() {
+            let t = ctx.temp_mut(tidx);
+            t.val_type = TempVal::Reg;
+            t.reg = Some(orig_reg);
+            state.assign(orig_reg, tidx);
+        }
+        if state.reg_to_temp[moved_reg as usize]
+            == Some(tidx)
+        {
+            state.free_reg(moved_reg);
+        }
+    }
+
+    // 7. Free dead outputs
     for k in 0..nb_oargs {
         if life.is_dead(k as u32) {
             let tidx = op.args[k];
@@ -454,7 +643,7 @@ fn regalloc_op(
         }
     }
 
-    // 7. Sync globals if needed
+    // 8. Sync globals if needed
     for i in 0..nb_iargs {
         let arg_pos = (nb_oargs + i) as u32;
         if life.is_sync(arg_pos) {
@@ -573,6 +762,14 @@ pub fn regalloc_and_codegen(
                 let cargs: Vec<u32> =
                     (0..nb_cargs).map(|i| op.args[cstart + i].0).collect();
                 backend.tcg_out_op(buf, ctx, &op, &[], &[], &cargs);
+            }
+
+            Opcode::Call => {
+                let ct = backend.op_constraint(op.opc);
+                regalloc_call(
+                    ctx, &mut state, backend, buf,
+                    &op, ct,
+                );
             }
 
             Opcode::GotoPtr => {
