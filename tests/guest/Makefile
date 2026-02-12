@@ -9,7 +9,7 @@
 
 CROSS_COMPILE ?= riscv64-linux-gnu-
 CC       = $(CROSS_COMPILE)gcc
-BUILDDIR = build/riscv64
+BUILDDIR = ../../target/guest/riscv64
 
 # Bare-metal programs (no libc, custom _start).
 BARE_CFLAGS = -static -nostdlib -march=rv64im -mabi=lp64 -O2
@@ -42,6 +42,6 @@ $(BUILDDIR):
 	mkdir -p $@
 
 clean:
-	rm -rf build
+	rm -rf ../../target/guest
 
 .PHONY: all clean
