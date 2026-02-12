@@ -8,9 +8,11 @@ fn tb_new() {
     assert_eq!(tb.icount, 0);
     assert_eq!(tb.jmp_insn_offset, [None, None]);
     assert_eq!(tb.jmp_reset_offset, [None, None]);
-    assert_eq!(tb.jmp_dest, [None, None]);
-    assert!(tb.jmp_list.is_empty());
-    assert_eq!(tb.exit_target, None);
+    let jmp = tb.jmp.lock().unwrap();
+    assert_eq!(jmp.jmp_dest, [None, None]);
+    assert!(jmp.jmp_list.is_empty());
+    assert_eq!(jmp.exit_target, None);
+    drop(jmp);
     assert_eq!(tb.hash_next, None);
 }
 

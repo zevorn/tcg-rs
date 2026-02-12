@@ -1,63 +1,56 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+
+/// Mutable chaining state protected by per-TB lock.
+pub struct TbJmpState {
+    /// Outgoing edge: destination TB index for each slot.
+    pub jmp_dest: [Option<usize>; 2],
+    /// Incoming edges: (source_tb_idx, slot) pairs.
+    pub jmp_list: Vec<(usize, usize)>,
+    /// Single-entry target cache for indirect exits.
+    pub exit_target: Option<usize>,
+}
+
+impl TbJmpState {
+    fn new() -> Self {
+        Self {
+            jmp_dest: [None; 2],
+            jmp_list: Vec::new(),
+            exit_target: None,
+        }
+    }
+}
+
 /// A cached translated code block.
 ///
-/// Maps to QEMU's `TranslationBlock`. Represents the mapping from a
-/// guest code region to generated host machine code.
-#[derive(Debug)]
+/// Maps to QEMU's `TranslationBlock`. Represents the mapping
+/// from a guest code region to generated host machine code.
+///
+/// Fields above `jmp` are immutable after creation (set during
+/// translation under translate_lock). The `jmp` mutex protects
+/// mutable chaining state. `invalid` is atomic for lock-free
+/// checking.
 pub struct TranslationBlock {
-    /// Guest virtual PC where this TB starts.
+    // -- Immutable after creation --
     pub pc: u64,
-    /// CS base (x86) or 0 for other architectures.
     pub cs_base: u64,
-    /// CPU state flags that affect translation (e.g. privilege level, ISA mode).
     pub flags: u32,
-    /// Compile flags (instruction count limit, single-step, etc.).
     pub cflags: u32,
-    /// Size of guest code covered by this TB, in bytes.
     pub size: u32,
-    /// Number of guest instructions in this TB.
     pub icount: u16,
-
-    /// Offset into the global code buffer where host code starts.
     pub host_offset: usize,
-    /// Size of generated host code in bytes.
     pub host_size: usize,
-
-    /// Offset of the `goto_tb` jump instruction for each exit (up to 2).
-    /// Used by TB chaining to atomically patch the jump target.
-    /// `None` means the slot is unused.
     pub jmp_insn_offset: [Option<u32>; 2],
-
-    /// Offset right after the `goto_tb` instruction for each exit.
-    /// Used to reset the jump when unlinking.
     pub jmp_reset_offset: [Option<u32>; 2],
-
-    /// Outgoing edge: destination TB index for each `goto_tb` slot.
-    /// `None` = not yet linked (jump still targets the epilogue).
-    pub jmp_dest: [Option<usize>; 2],
-
-    /// Cached cycle detection: if `chain_reachable` returned true
-    /// for this slot, skip the DFS on subsequent iterations and
-    /// use `jmp_dest[slot]` as a direct hint instead.
-    pub jmp_nochain: [bool; 2],
-
-    /// Incoming edges: list of (source_tb_idx, slot) pairs.
-    /// Records which TBs have their goto_tb patched to jump here.
-    pub jmp_list: Vec<(usize, usize)>,
-
-    /// Single-entry target cache for indirect exits
-    /// (`TB_EXIT_NOCHAIN`).  Simplified `lookup_and_goto_ptr`:
-    /// caches the last observed destination so the exec loop can
-    /// skip `tb_find` when the target repeats.
-    pub exit_target: Option<usize>,
-
-    /// Physical page address for TB invalidation tracking.
     pub phys_pc: u64,
-
-    /// Index of the next TB in the same hash bucket, or `None`.
+    /// Protected by TbStore hash lock.
     pub hash_next: Option<usize>,
 
-    /// Whether this TB has been invalidated.
-    pub invalid: bool,
+    // -- Per-TB lock for chaining state --
+    pub jmp: Mutex<TbJmpState>,
+
+    // -- Atomic --
+    pub invalid: AtomicBool,
 }
 
 /// Compile flags for TranslationBlock.cflags.
@@ -70,6 +63,19 @@ pub mod cflags {
     pub const CF_SINGLE_STEP: u32 = 0x0002_0000;
     /// Use icount (deterministic execution).
     pub const CF_USE_ICOUNT: u32 = 0x0004_0000;
+}
+
+impl std::fmt::Debug for TranslationBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TranslationBlock")
+            .field("pc", &self.pc)
+            .field("flags", &self.flags)
+            .field("size", &self.size)
+            .field("host_offset", &self.host_offset)
+            .field("host_size", &self.host_size)
+            .field("invalid", &self.invalid.load(Ordering::Relaxed))
+            .finish()
+    }
 }
 
 impl TranslationBlock {
@@ -85,13 +91,10 @@ impl TranslationBlock {
             host_size: 0,
             jmp_insn_offset: [None; 2],
             jmp_reset_offset: [None; 2],
-            jmp_dest: [None; 2],
-            jmp_nochain: [false; 2],
-            jmp_list: Vec::new(),
-            exit_target: None,
             phys_pc: 0,
             hash_next: None,
-            invalid: false,
+            jmp: Mutex::new(TbJmpState::new()),
+            invalid: AtomicBool::new(false),
         }
     }
 
