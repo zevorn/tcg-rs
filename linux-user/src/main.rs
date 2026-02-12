@@ -42,6 +42,8 @@ impl GuestCpu for LinuxCpu {
                 d.gpr[i] = TempIdx(1 + i as u32);
             }
             d.pc = TempIdx(1 + NUM_GPRS as u32);
+            d.load_res = TempIdx(1 + NUM_GPRS as u32 + 1);
+            d.load_val = TempIdx(1 + NUM_GPRS as u32 + 2);
             RiscvTranslator::tb_start(&mut d, ir);
             loop {
                 RiscvTranslator::insn_start(&mut d, ir);
