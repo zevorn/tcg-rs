@@ -1,6 +1,6 @@
 #![allow(non_upper_case_globals)]
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 
 use crate::code_buffer::CodeBuffer;
 use crate::x86_64::regs::Reg;
@@ -1176,7 +1176,7 @@ pub struct X86_64CodeGen {
     pub tb_ret_offset: usize,
     pub code_gen_start: usize,
     /// Recorded (jmp_offset, reset_offset) for each goto_tb.
-    pub(crate) goto_tb_info: RefCell<Vec<(usize, usize)>>,
+    pub(crate) goto_tb_info: Mutex<Vec<(usize, usize)>>,
 }
 
 impl X86_64CodeGen {
@@ -1186,7 +1186,7 @@ impl X86_64CodeGen {
             epilogue_return_zero_offset: 0,
             tb_ret_offset: 0,
             code_gen_start: 0,
-            goto_tb_info: RefCell::new(Vec::new()),
+            goto_tb_info: Mutex::new(Vec::new()),
         }
     }
 
@@ -1202,8 +1202,16 @@ impl X86_64CodeGen {
 
     /// Emit `goto_tb(n)`: a patchable direct jump (5 bytes: E9 + disp32).
     ///
-    /// Single-threaded: no alignment needed for atomic patching.
+    /// The disp32 field is aligned to 4 bytes so that concurrent
+    /// patching (MTTCG) is atomic on x86-64.
     pub fn emit_goto_tb(&self, buf: &mut CodeBuffer) -> (usize, usize) {
+        // Align disp32 to 4 bytes for atomic patching.
+        let disp_addr = buf.offset() + 1; // after E9 opcode
+        let aligned = (disp_addr + 3) & !3;
+        let pad = aligned - disp_addr;
+        if pad > 0 {
+            emit_nops(buf, pad);
+        }
         let jmp_offset = buf.offset();
         buf.emit_u8(0xE9);
         buf.emit_u32(0);
