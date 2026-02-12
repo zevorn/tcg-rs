@@ -8,7 +8,7 @@
 #   Licensed under GPL-2.0-or-later.
 #
 # Subset: RV64C only.  Excludes Zcb, Zcmp, Zcmt, Zclsd, Zcmops,
-# Float (c_fld/c_flw/c_fsd/c_fsw), RV128 (lq/sq).
+# RV128 (lq/sq).
 
 # Fields:
 %rd        7:5
@@ -79,10 +79,22 @@
   illegal         000  000 000 00 --- 00
   addi            000  ... ... .. ... 00 @c_addi4spn
 }
+{
+  c_fld           001  ... ... .. ... 00 @cl_d
+}
 lw                010  ... ... .. ... 00 @cl_w
-ld                011  ... ... .. ... 00 @cl_d
+{
+  ld              011  ... ... .. ... 00 @cl_d
+  c_flw           011  ... ... .. ... 00 @cl_w
+}
+{
+  c_fsd           101  ... ... .. ... 00 @cs_d
+}
 sw                110  ... ... .. ... 00 @cs_w
-sd                111  ... ... .. ... 00 @cs_d
+{
+  sd              111  ... ... .. ... 00 @cs_d
+  c_fsw           111  ... ... .. ... 00 @cs_w
+}
 
 # *** RV32/64C Standard Extension (Quadrant 1) ***
 addi              000 .  .....  ..... 01 @ci
@@ -114,6 +126,9 @@ addw              100 1 11 ... 01 ... 01 @cs_2
 # *** RV32/64C Standard Extension (Quadrant 2) ***
 slli              000 .  .....  ..... 10 @c_shift2
 {
+  c_fld           001 .  .....  ..... 10 @c_ldsp
+}
+{
   illegal         010 -  00000  ----- 10
   lw              010 .  .....  ..... 10 @c_lwsp
 }
@@ -128,6 +143,9 @@ slli              000 .  .....  ..... 10 @c_shift2
   add             100 1  .....  ..... 10 @cr
 }
 sw                110 .  .....  ..... 10 @c_swsp
+{
+  c_fsd           101   ......  ..... 10 @c_sdsp
+}
 
 # *** RV64C specific (Quadrant 2) ***
 {
