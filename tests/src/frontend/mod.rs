@@ -8,10 +8,10 @@ use tcg_backend::code_buffer::CodeBuffer;
 use tcg_backend::translate::translate_and_execute;
 use tcg_backend::HostCodeGen;
 use tcg_backend::X86_64CodeGen;
-use tcg_core::tb::{EXCP_EBREAK, EXCP_ECALL};
+use tcg_core::tb::{EXCP_EBREAK, EXCP_ECALL, EXCP_UNDEF};
 use tcg_core::Context;
 use tcg_frontend::riscv::cpu::RiscvCpu;
-use tcg_frontend::riscv::ext::RiscvCfg;
+use tcg_frontend::riscv::ext::{MisaExt, RiscvCfg};
 use tcg_frontend::riscv::{RiscvDisasContext, RiscvTranslator};
 use tcg_frontend::translator_loop;
 
@@ -194,6 +194,33 @@ fn sraw(rd: u32, rs1: u32, rs2: u32) -> u32 {
     rv_r(0b0100000, rs2, rs1, 0b101, rd, OP_REG32)
 }
 
+// RV32M
+const OP_M_FUNCT7: u32 = 0b0000001;
+fn mul(rd: u32, rs1: u32, rs2: u32) -> u32 {
+    rv_r(OP_M_FUNCT7, rs2, rs1, 0b000, rd, OP_REG)
+}
+fn div_rv(rd: u32, rs1: u32, rs2: u32) -> u32 {
+    rv_r(OP_M_FUNCT7, rs2, rs1, 0b100, rd, OP_REG)
+}
+fn mulw(rd: u32, rs1: u32, rs2: u32) -> u32 {
+    rv_r(OP_M_FUNCT7, rs2, rs1, 0b000, rd, OP_REG32)
+}
+
+// RV32A
+const OP_AMO: u32 = 0b0101111;
+fn lr_w(rd: u32, rs1: u32) -> u32 {
+    rv_r(0b00010 << 2, 0, rs1, 0b010, rd, OP_AMO)
+}
+fn amoswap_w(rd: u32, rs1: u32, rs2: u32) -> u32 {
+    rv_r(0b00001 << 2, rs2, rs1, 0b010, rd, OP_AMO)
+}
+
+// Zicsr
+const OP_SYSTEM: u32 = 0b1110011;
+fn csrrw(rd: u32, rs1: u32, csr: u32) -> u32 {
+    (csr << 20) | (rs1 << 15) | (0b001 << 12) | (rd << 7) | OP_SYSTEM
+}
+
 // ── Test runner ───────────────────────────────────────────────
 
 /// Translate one RISC-V instruction at PC=0 and execute it.
@@ -204,6 +231,15 @@ fn run_rv(cpu: &mut RiscvCpu, insn: u32) -> usize {
 /// Translate a sequence of RISC-V instructions starting at
 /// PC=0 and execute the resulting TB.
 fn run_rv_insns(cpu: &mut RiscvCpu, insns: &[u32]) -> usize {
+    run_rv_insns_with_cfg(cpu, insns, RiscvCfg::default())
+}
+
+/// Like `run_rv_insns` but with a custom extension config.
+fn run_rv_insns_with_cfg(
+    cpu: &mut RiscvCpu,
+    insns: &[u32],
+    cfg: RiscvCfg,
+) -> usize {
     let code: Vec<u8> = insns.iter().flat_map(|i| i.to_le_bytes()).collect();
     let guest_base = code.as_ptr();
 
@@ -215,7 +251,7 @@ fn run_rv_insns(cpu: &mut RiscvCpu, insns: &[u32]) -> usize {
     let mut ctx = Context::new();
     backend.init_context(&mut ctx);
 
-    let mut disas = RiscvDisasContext::new(0, guest_base, RiscvCfg::default());
+    let mut disas = RiscvDisasContext::new(0, guest_base, cfg);
     disas.base.max_insns = insns.len() as u32;
     translator_loop::<RiscvTranslator>(&mut disas, &mut ctx);
 
@@ -227,6 +263,11 @@ fn run_rv_insns(cpu: &mut RiscvCpu, insns: &[u32]) -> usize {
             cpu as *mut RiscvCpu as *mut u8,
         )
     }
+}
+
+/// Like `run_rv` but with a custom extension config.
+fn run_rv_with_cfg(cpu: &mut RiscvCpu, insn: u32, cfg: RiscvCfg) -> usize {
+    run_rv_insns_with_cfg(cpu, &[insn], cfg)
 }
 
 // ── RV32I: Upper immediate ────────────────────────────────────
@@ -1076,6 +1117,33 @@ fn run_rvc(cpu: &mut RiscvCpu, insn: u16) -> usize {
     run_rv_bytes(cpu, &code)
 }
 
+/// Like `run_rvc` but with a custom extension config.
+fn run_rvc_with_cfg(cpu: &mut RiscvCpu, insn: u16, cfg: RiscvCfg) -> usize {
+    let code = insn.to_le_bytes();
+    let guest_base = code.as_ptr();
+
+    let mut backend = X86_64CodeGen::new();
+    let mut buf = CodeBuffer::new(4096).unwrap();
+    backend.emit_prologue(&mut buf);
+    backend.emit_epilogue(&mut buf);
+
+    let mut ctx = Context::new();
+    backend.init_context(&mut ctx);
+
+    let mut disas = RiscvDisasContext::new(0, guest_base, cfg);
+    disas.base.max_insns = 1;
+    translator_loop::<RiscvTranslator>(&mut disas, &mut ctx);
+
+    unsafe {
+        translate_and_execute(
+            &mut ctx,
+            &backend,
+            &mut buf,
+            cpu as *mut RiscvCpu as *mut u8,
+        )
+    }
+}
+
 // ── RVC execution tests ──────────────────────────────────────
 
 #[test]
@@ -1408,4 +1476,112 @@ fn test_fcvt_fadd_sequence() {
     );
     // 30.0f = 0x41F00000
     assert_eq!(cpu.fpr[3], nanbox(0x41f0_0000));
+}
+
+// ── Extension profile tests ─────────────────────────────────
+
+/// Helper: RV64I-only config (no M/A/F/D/C).
+fn cfg_rv64i_only() -> RiscvCfg {
+    RiscvCfg {
+        misa: MisaExt::I,
+        ext_zicsr: false,
+        ext_zifencei: false,
+        ext_zba: false,
+        ext_zbb: false,
+        ext_zbc: false,
+        ext_zbs: false,
+    }
+}
+
+#[test]
+fn test_ext_mul_rejected_without_m() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[2] = 6;
+    cpu.gpr[3] = 7;
+    let exit = run_rv_with_cfg(&mut cpu, mul(1, 2, 3), cfg_rv64i_only());
+    assert_eq!(exit, EXCP_UNDEF as usize);
+}
+
+#[test]
+fn test_ext_mul_accepted_with_m() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[2] = 6;
+    cpu.gpr[3] = 7;
+    let cfg = RiscvCfg {
+        misa: MisaExt::I.union(MisaExt::M),
+        ..cfg_rv64i_only()
+    };
+    run_rv_with_cfg(&mut cpu, mul(1, 2, 3), cfg);
+    assert_eq!(cpu.gpr[1], 42);
+}
+
+#[test]
+fn test_ext_div_rejected_without_m() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[2] = 42;
+    cpu.gpr[3] = 6;
+    let exit = run_rv_with_cfg(&mut cpu, div_rv(1, 2, 3), cfg_rv64i_only());
+    assert_eq!(exit, EXCP_UNDEF as usize);
+}
+
+#[test]
+fn test_ext_mulw_rejected_without_m() {
+    let mut cpu = RiscvCpu::new();
+    cpu.gpr[2] = 3;
+    cpu.gpr[3] = 4;
+    let exit = run_rv_with_cfg(&mut cpu, mulw(1, 2, 3), cfg_rv64i_only());
+    assert_eq!(exit, EXCP_UNDEF as usize);
+}
+
+#[test]
+fn test_ext_lr_w_rejected_without_a() {
+    let mut cpu = RiscvCpu::new();
+    let exit = run_rv_with_cfg(&mut cpu, lr_w(1, 2), cfg_rv64i_only());
+    assert_eq!(exit, EXCP_UNDEF as usize);
+}
+
+#[test]
+fn test_ext_amoswap_w_rejected_without_a() {
+    let mut cpu = RiscvCpu::new();
+    let exit = run_rv_with_cfg(&mut cpu, amoswap_w(1, 2, 3), cfg_rv64i_only());
+    assert_eq!(exit, EXCP_UNDEF as usize);
+}
+
+#[test]
+fn test_ext_csrrw_rejected_without_zicsr() {
+    let mut cpu = RiscvCpu::new();
+    // CSRRW x1, fflags(0x001), x0
+    let exit = run_rv_with_cfg(&mut cpu, csrrw(1, 0, 0x001), cfg_rv64i_only());
+    assert_eq!(exit, EXCP_UNDEF as usize);
+}
+
+#[test]
+fn test_ext_csrrw_accepted_with_zicsr() {
+    let mut cpu = RiscvCpu::new();
+    let cfg = RiscvCfg {
+        ext_zicsr: true,
+        ..cfg_rv64i_only()
+    };
+    // CSRRW x1, fflags(0x001), x0 — reads fflags
+    run_rv_with_cfg(&mut cpu, csrrw(1, 0, 0x001), cfg);
+    assert_eq!(cpu.gpr[1], 0);
+}
+
+#[test]
+fn test_ext_fadd_s_rejected_without_f() {
+    let mut cpu = RiscvCpu::new();
+    let exit = run_rv_with_cfg(&mut cpu, fadd_s(1, 2, 3, 0), cfg_rv64i_only());
+    assert_eq!(exit, EXCP_UNDEF as usize);
+}
+
+#[test]
+fn test_ext_c_insn_rejected_without_c() {
+    let mut cpu = RiscvCpu::new();
+    let cfg = RiscvCfg {
+        misa: MisaExt::I.union(MisaExt::M),
+        ..cfg_rv64i_only()
+    };
+    // C.LI x1, 42 — should fail without C extension
+    let exit = run_rvc_with_cfg(&mut cpu, c_li(1, 42), cfg);
+    assert_eq!(exit, EXCP_UNDEF as usize);
 }
