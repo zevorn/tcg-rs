@@ -8,6 +8,7 @@ use tcg_core::TempIdx;
 use tcg_exec::exec_loop::{cpu_exec_loop, ExitReason};
 use tcg_exec::{ExecEnv, GuestCpu};
 use tcg_frontend::riscv::cpu::{RiscvCpu, NUM_GPRS};
+use tcg_frontend::riscv::ext::RiscvCfg;
 use tcg_frontend::riscv::{RiscvDisasContext, RiscvTranslator};
 use tcg_frontend::{translator_loop, DisasJumpType, TranslatorOps};
 use tcg_linux_user::guest_space::GuestSpace;
@@ -17,6 +18,7 @@ use tcg_linux_user::syscall::{handle_syscall, SyscallResult};
 /// Wrapper: RiscvCpu + guest_base for GuestCpu trait.
 struct LinuxCpu {
     cpu: RiscvCpu,
+    cfg: RiscvCfg,
 }
 
 impl GuestCpu for LinuxCpu {
@@ -31,12 +33,12 @@ impl GuestCpu for LinuxCpu {
     fn gen_code(&mut self, ir: &mut Context, pc: u64, max_insns: u32) -> u32 {
         let base = self.cpu.guest_base as *const u8;
         if ir.nb_globals() == 0 {
-            let mut d = RiscvDisasContext::new(pc, base);
+            let mut d = RiscvDisasContext::new(pc, base, self.cfg);
             d.base.max_insns = max_insns;
             translator_loop::<RiscvTranslator>(&mut d, ir);
             d.base.num_insns * 4
         } else {
-            let mut d = RiscvDisasContext::new(pc, base);
+            let mut d = RiscvDisasContext::new(pc, base, self.cfg);
             d.base.max_insns = max_insns;
             d.env = TempIdx(0);
             for i in 0..NUM_GPRS {
@@ -88,6 +90,7 @@ fn main() {
     // Set up CPU
     let mut lcpu = LinuxCpu {
         cpu: RiscvCpu::new(),
+        cfg: RiscvCfg::default(),
     };
     lcpu.cpu.pc = info.entry;
     lcpu.cpu.gpr[2] = info.sp; // SP = x2

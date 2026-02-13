@@ -16,6 +16,7 @@ use tcg_backend::HostCodeGen;
 use tcg_backend::X86_64CodeGen;
 use tcg_core::Context;
 use tcg_frontend::riscv::cpu::RiscvCpu;
+use tcg_frontend::riscv::ext::RiscvCfg;
 use tcg_frontend::riscv::{RiscvDisasContext, RiscvTranslator};
 use tcg_frontend::translator_loop;
 
@@ -347,7 +348,7 @@ fn run_tcgrs(init: &[(usize, u64)], insns: &[u32]) -> RiscvCpu {
     let mut ctx = Context::new();
     backend.init_context(&mut ctx);
 
-    let mut disas = RiscvDisasContext::new(0, guest_base);
+    let mut disas = RiscvDisasContext::new(0, guest_base, RiscvCfg::default());
     disas.base.max_insns = insns.len() as u32;
     translator_loop::<RiscvTranslator>(&mut disas, &mut ctx);
 

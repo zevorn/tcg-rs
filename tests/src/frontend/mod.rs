@@ -11,6 +11,7 @@ use tcg_backend::X86_64CodeGen;
 use tcg_core::tb::{EXCP_EBREAK, EXCP_ECALL};
 use tcg_core::Context;
 use tcg_frontend::riscv::cpu::RiscvCpu;
+use tcg_frontend::riscv::ext::RiscvCfg;
 use tcg_frontend::riscv::{RiscvDisasContext, RiscvTranslator};
 use tcg_frontend::translator_loop;
 
@@ -214,7 +215,7 @@ fn run_rv_insns(cpu: &mut RiscvCpu, insns: &[u32]) -> usize {
     let mut ctx = Context::new();
     backend.init_context(&mut ctx);
 
-    let mut disas = RiscvDisasContext::new(0, guest_base);
+    let mut disas = RiscvDisasContext::new(0, guest_base, RiscvCfg::default());
     disas.base.max_insns = insns.len() as u32;
     translator_loop::<RiscvTranslator>(&mut disas, &mut ctx);
 
@@ -1055,7 +1056,7 @@ fn run_rv_bytes(cpu: &mut RiscvCpu, code: &[u8]) -> usize {
     backend.init_context(&mut ctx);
 
     let n = count_insns(code);
-    let mut disas = RiscvDisasContext::new(0, guest_base);
+    let mut disas = RiscvDisasContext::new(0, guest_base, RiscvCfg::default());
     disas.base.max_insns = n;
     translator_loop::<RiscvTranslator>(&mut disas, &mut ctx);
 

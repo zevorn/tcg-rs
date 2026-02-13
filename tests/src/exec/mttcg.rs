@@ -10,6 +10,7 @@ use tcg_core::TempIdx;
 use tcg_exec::exec_loop::{cpu_exec_loop_mt, ExitReason};
 use tcg_exec::{ExecEnv, GuestCpu, PerCpuState, SharedState};
 use tcg_frontend::riscv::cpu::RiscvCpu;
+use tcg_frontend::riscv::ext::RiscvCfg;
 use tcg_frontend::riscv::{RiscvDisasContext, RiscvTranslator};
 use tcg_frontend::{translator_loop, DisasJumpType, TranslatorOps};
 
@@ -44,12 +45,12 @@ impl GuestCpu for TestCpu {
         let limit = max_insns.min(avail as u32);
 
         if ir.nb_globals() == 0 {
-            let mut d = RiscvDisasContext::new(pc, base);
+            let mut d = RiscvDisasContext::new(pc, base, RiscvCfg::default());
             d.base.max_insns = limit;
             translator_loop::<RiscvTranslator>(&mut d, ir);
             d.base.num_insns * 4
         } else {
-            let mut d = RiscvDisasContext::new(pc, base);
+            let mut d = RiscvDisasContext::new(pc, base, RiscvCfg::default());
             d.base.max_insns = limit;
             d.env = TempIdx(0);
             for i in 0..NUM_GPRS {

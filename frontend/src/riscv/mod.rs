@@ -9,6 +9,7 @@ mod trans;
 
 use crate::{DisasContextBase, DisasJumpType, TranslatorOps};
 use cpu::{gpr_offset, LOAD_RES_OFFSET, LOAD_VAL_OFFSET, NUM_GPRS, PC_OFFSET};
+use ext::RiscvCfg;
 use tcg_core::tb::{EXCP_UNDEF, TB_EXIT_IDX0};
 use tcg_core::{Context, TempIdx, Type};
 
@@ -20,6 +21,8 @@ use tcg_core::{Context, TempIdx, Type};
 pub struct RiscvDisasContext {
     /// Generic base fields (pc, is_jmp, counters).
     pub base: DisasContextBase,
+    /// Extension configuration for this translation.
+    pub cfg: RiscvCfg,
     /// IR temp for the env pointer (fixed to host RBP).
     pub env: TempIdx,
     /// IR temps for guest GPRs x0-x31 (globals).
@@ -42,7 +45,7 @@ impl RiscvDisasContext {
     /// Create a new context for translating a TB starting
     /// at `pc`.  `guest_base` points to the host mapping of
     /// guest memory (user-mode: identity).
-    pub fn new(pc: u64, guest_base: *const u8) -> Self {
+    pub fn new(pc: u64, guest_base: *const u8, cfg: RiscvCfg) -> Self {
         Self {
             base: DisasContextBase {
                 pc_first: pc,
@@ -51,6 +54,7 @@ impl RiscvDisasContext {
                 num_insns: 0,
                 max_insns: 512,
             },
+            cfg,
             env: TempIdx(0),
             gpr: [TempIdx(0); NUM_GPRS],
             pc: TempIdx(0),
@@ -126,10 +130,14 @@ impl TranslatorOps for RiscvTranslator {
         // Fetch 16-bit half-word to determine instruction length.
         let half = unsafe { ctx.fetch_insn16() };
         let decoded = if half & 0x3 != 0x3 {
-            // 16-bit compressed instruction
-            ctx.opcode = half as u32;
-            ctx.cur_insn_len = 2;
-            insn_decode::decode16(ctx, ir, half)
+            // 16-bit compressed instruction — requires C extension.
+            if !ctx.cfg.misa.contains(ext::MisaExt::C) {
+                false
+            } else {
+                ctx.opcode = half as u32;
+                ctx.cur_insn_len = 2;
+                insn_decode::decode16(ctx, ir, half)
+            }
         } else {
             // 32-bit instruction
             let insn = unsafe { ctx.fetch_insn32() };
