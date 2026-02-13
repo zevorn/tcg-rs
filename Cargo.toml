@@ -4,6 +4,7 @@ members = [
     "backend",
     "frontend",
     "decode",
+    "disas",
     "exec",
     "linux-user",
     "tests",
