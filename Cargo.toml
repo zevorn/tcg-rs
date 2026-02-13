@@ -8,5 +8,6 @@ members = [
     "exec",
     "linux-user",
     "tests",
+    "tools/irdump",
 ]
 resolver = "2"
