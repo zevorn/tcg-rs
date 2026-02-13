@@ -1,16 +1,18 @@
 use crate::code_buffer::CodeBuffer;
 use crate::liveness::liveness_analysis;
+use crate::optimize::optimize;
 use crate::regalloc::regalloc_and_codegen;
 use crate::HostCodeGen;
 use tcg_core::Context;
 
-/// Full translation pipeline: liveness → regalloc+codegen.
+/// Full translation pipeline: optimize → liveness → regalloc+codegen.
 /// Returns the offset where TB code starts in the buffer.
 pub fn translate(
     ctx: &mut Context,
     backend: &impl HostCodeGen,
     buf: &mut CodeBuffer,
 ) -> usize {
+    optimize(ctx);
     liveness_analysis(ctx);
     let tb_start = buf.offset();
     regalloc_and_codegen(ctx, backend, buf);
