@@ -5,19 +5,19 @@
 
 [QEMU](https://www.qemu.org/) **TCG**（Tiny Code Generator）的 Rust 重新实现——一个动态二进制翻译引擎，在运行时将客户架构指令转换为宿主机器码。
 
-> **状态**：完整的翻译流水线已端到端可工作——RISC-V 客户指令通过 decodetree 生成的解码器解码，翻译为 TCG IR，经活跃性分析优化，寄存器分配后编译为 x86-64 机器码并执行。MTTCG 执行、直接 TB 链路和 linux-user ELF 加载与 syscall 仿真均已可用。差分测试框架可对比 QEMU 验证正确性。
+> **状态**：完整的翻译流水线已端到端可工作——RISC-V 客户指令通过 decodetree 生成的解码器解码，翻译为 TCG IR，经 IR 优化（常量折叠、拷贝传播、代数简化）和活跃性分析，寄存器分配后编译为 x86-64 机器码并执行。MTTCG 执行、直接 TB 链路和 linux-user ELF 加载与 syscall 仿真均已可用。差分测试框架可对比 QEMU 验证正确性。
 
 ## 概述
 
 tcg-rs 旨在提供一个干净、安全、模块化的 QEMU TCG 子系统 Rust 实现。项目遵循 QEMU 经过验证的架构，同时利用 Rust 的类型系统、内存安全和基于 trait 的可扩展性。
 
 ```
-┌──────────────┐    ┌───────────────┐    ┌──────────────┐    ┌──────────┐    ┌──────────────────┐    ┌─────────┐
-│ Guest Binary │───→│ Frontend      │───→│ IR Builder   │───→│ Liveness │───→│ RegAlloc+Codegen │───→│ Execute │
-│ (RISC-V)     │    │ (decodetree   │    │ (gen_*)      │    │ Analysis │    │ (x86-64)         │    │ (JIT)   │
-└──────────────┘    │  + trans_*)   │    └──────────────┘    └──────────┘    └──────────────────┘    └─────────┘
+┌──────────────┐    ┌───────────────┐    ┌──────────────┐    ┌───────────┐    ┌──────────┐    ┌──────────────────┐    ┌─────────┐
+│ Guest Binary │───→│ Frontend      │───→│ IR Builder   │───→│ Optimizer │───→│ Liveness │───→│ RegAlloc+Codegen │───→│ Execute │
+│ (RISC-V)     │    │ (decodetree   │    │ (gen_*)      │    │           │    │ Analysis │    │ (x86-64)         │    │ (JIT)   │
+└──────────────┘    │  + trans_*)   │    └──────────────┘    └───────────┘    └──────────┘    └──────────────────┘    └─────────┘
                     └───────────────┘
-                     tcg-frontend         tcg-core            tcg-backend     tcg-backend             tcg-backend
+                     tcg-frontend         tcg-core             tcg-backend     tcg-backend     tcg-backend             tcg-backend
 ```
 
 ## Crate 结构
@@ -25,15 +25,12 @@ tcg-rs 旨在提供一个干净、安全、模块化的 QEMU TCG 子系统 Rust 
 | Crate | 状态 | 描述 |
 |-------|------|------|
 | `tcg-core` | 已实现 | IR 定义（opcodes、types、temps、ops、context、labels、TBs）+ IR 构建器（`gen_*` 方法） |
-| `tcg-backend` | 已实现 | 活跃性分析、约束系统、寄存器分配器、x86-64 代码生成、翻译流水线 |
+| `tcg-backend` | 已实现 | IR 优化器、活跃性分析、约束系统、寄存器分配器、x86-64 代码生成、翻译流水线 |
 | `tcg-exec` | 已实现 | 支持 MTTCG 的执行循环、TB 存储、直接链路、每 vCPU 跳转缓存、执行统计 |
 | `tcg-linux-user` | 已实现 | ELF 加载、guest 地址空间、Linux syscall 仿真、`tcg-riscv64` 运行器 |
 | `decodetree` | 已实现 | QEMU 风格 `.decode` 文件解析器和 Rust 代码生成器，用于生成指令解码器 |
 | `tcg-frontend` | 已实现 | 客户指令解码框架 + RISC-V RV64IMAFDC 前端（184 条指令） |
 | `tcg-tests` | 已实现 | 816 个测试：单元、后端回归、前端翻译、difftest、MTTCG、linux-user 端到端 |
-| `tcg-opt` | 计划中 | IR 优化器：常量/拷贝传播、DCE |
-| `tcg-mmu` | 计划中 | 软件 TLB、客户内存访问 |
-| `tcg-runtime` | 计划中 | 生成代码调用的运行时辅助函数 |
 
 ## 关键设计决策
 
@@ -67,10 +64,11 @@ cargo fmt --check            # 格式检查
 
 ### tcg-backend
 
+- **IR 优化器**（`optimize.rs`）：在活跃性分析前运行的单遍优化器——常量折叠（一元、二元、类型转换）、拷贝传播、代数简化（恒等/零化规则）、同操作数恒等式、分支常量折叠（BrCond → Br/Nop）
 - **约束系统**（`constraint.rs`）：`ArgConstraint`/`OpConstraint` 类型及构建函数（`o1_i2_alias`、`o1_i2_alias_fixed`、`n1_i2` 等）
 - **活跃性分析**（`liveness.rs`）：反向遍历计算每个参数的 dead/sync 标志
 - **寄存器分配器**（`regalloc.rs`）：约束驱动贪心分配器，对齐 QEMU 的 `tcg_reg_alloc_op()`——别名复用、强制驱逐、输入后修正
-- **翻译流水线**（`translate.rs`）：`translate_and_execute()` 串联 liveness → regalloc+codegen → JIT 执行
+- **翻译流水线**（`translate.rs`）：`translate_and_execute()` 串联 optimize → liveness → regalloc+codegen → JIT 执行
 - **x86-64 后端**：
   - 完整 GPR 指令编码器（emitter.rs）：算术、移位、数据移动、内存、乘除、位操作、分支、setcc/cmovcc
   - 约束表（constraints.rs）：per-opcode 寄存器约束，对齐 QEMU 的 `tcg_target_op_def()`

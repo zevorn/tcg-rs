@@ -6,7 +6,7 @@
 
 tcg-rs 是 QEMU TCG（Tiny Code Generator）的 Rust 重新实现——一个动态二进制翻译引擎，在运行时将客户架构指令转换为宿主机器码。参考实现位于 `~/qemu/tcg/`、`~/qemu/accel/tcg/` 和 `~/qemu/include/tcg/`。
 
-**当前状态快照（2026-02-12）**：
+**当前状态快照（2026-02-13）**：
 
 - 已有可用 MTTCG 执行路径：`cpu_exec_loop_mt`、共享 `SharedState`、
   每 vCPU `PerCpuState`。
@@ -14,6 +14,8 @@ tcg-rs 是 QEMU TCG（Tiny Code Generator）的 Rust 重新实现——一个动
   与 `argv_echo` 测题。
 - 性能关键路径已包含：jump cache、TB hash、`next_tb_hint`、
   `goto_tb` 链路 patch、`exit_target` 原子缓存。
+- IR 优化器已实现：常量折叠、拷贝传播、代数简化、分支常量折叠，
+  在 liveness 之前运行（`backend/src/optimize.rs`）。
 
 ## 构建与开发命令
 
@@ -80,7 +82,7 @@ Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen
 | Crate | 职责 | QEMU 参考 |
 |-------|------|----------|
 | `tcg-core` | IR 定义：opcodes、types、temps、TCGOp、TCGContext、labels、TB 元数据 | `include/tcg/tcg.h`、`tcg/tcg-opc.h` |
-| `tcg-backend` | 活跃性分析、约束系统、寄存器分配、x86-64 代码生成 | `tcg/tcg.c`（codegen 部分）、`tcg/i386/tcg-target.c.inc` |
+| `tcg-backend` | 活跃性分析、IR 优化器、约束系统、寄存器分配、x86-64 代码生成 | `tcg/tcg.c`（codegen 部分）、`tcg/optimize.c`、`tcg/i386/tcg-target.c.inc` |
 | `tcg-frontend` | 客户指令解码框架与 RISC-V 翻译器 | `target/riscv/translate.c`、`accel/tcg/translator.c` |
 | `tcg-exec` | MTTCG 执行循环、TB 缓存（jump cache + hash）、TB 链路/失效 | `accel/tcg/cpu-exec.c`、`accel/tcg/translate-all.c`、`accel/tcg/tb-maint.c` |
 | `tcg-linux-user` | 用户态 ELF 加载、地址空间与 syscall 仿真 | `linux-user/main.c`、`linux-user/elfload.c`、`linux-user/syscall.c` |
@@ -196,6 +198,7 @@ x86-64 后端位于 `backend/src/x86_64/`，包含三个文件：
 
 已落地优化点：
 
+- IR 优化器：常量折叠、拷贝传播、代数简化、分支常量折叠。
 - 每 vCPU `JumpCache`（4096）+ 全局 TB hash 的双层查找。
 - 并发翻译双重检查（拿到 `translate_lock` 后再查一次 hash）。
 - `goto_tb` 槽位链路 patch（直接 TB→TB 跳转）。

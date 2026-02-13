@@ -25,7 +25,7 @@ tcg-rs/
 └── tests/          # 测试层：单元、集成、difftest、MTTCG、linux-user
 ```
 
-**设计意图**：遵循 QEMU 的 `include/tcg/` (定义) 与 `tcg/` (实现) 分离原则。`tcg-core` 是纯粹的数据定义，不包含任何平台相关代码或 `unsafe`，`tcg-frontend` 和未来的 `tcg-opt` 都只需依赖 `tcg-core`。`decodetree` 是独立的构建时工具 crate，解析 QEMU 风格的 `.decode` 文件并生成 Rust 解码器代码。测试独立成 crate 是为了保持源码文件干净，且外部 crate 测试能验证公共 API 的完整性。
+**设计意图**：遵循 QEMU 的 `include/tcg/` (定义) 与 `tcg/` (实现) 分离原则。`tcg-core` 是纯粹的数据定义，不包含任何平台相关代码或 `unsafe`，`tcg-frontend` 和 `tcg-backend`（含优化器）都只需依赖 `tcg-core`。`decodetree` 是独立的构建时工具 crate，解析 QEMU 风格的 `.decode` 文件并生成 Rust 解码器代码。测试独立成 crate 是为了保持源码文件干净，且外部 crate 测试能验证公共 API 的完整性。
 
 ### 2.1 MTTCG 支持与执行流程对齐
 
@@ -330,9 +330,9 @@ struct OpConstraint {
 完整的翻译流水线将 TCG IR 转换为可执行的宿主机器码：
 
 ```
-Guest Binary → Frontend (decode) → IR Builder (gen_*) → Liveness → RegAlloc + Codegen → Execute
-                riscv/trans.rs      ir_builder.rs        liveness.rs  regalloc.rs        translate.rs
-                                                                      codegen.rs
+Guest Binary → Frontend (decode) → IR Builder (gen_*) → Optimize → Liveness → RegAlloc + Codegen → Execute
+                riscv/trans.rs      ir_builder.rs        optimize.rs  liveness.rs  regalloc.rs        translate.rs
+                                                                                    codegen.rs
 ```
 
 ### 5.1 IR Builder (`ir_builder.rs`)
@@ -356,7 +356,44 @@ type 和 args 布局。
 | TB 出口 | `gen_goto_tb/exit_tb` | (tb_idx) / (val) |
 | 边界 | `gen_insn_start` | (pc) |
 
-### 5.2 活跃性分析 (`liveness.rs`)
+### 5.2 IR 优化器 (`optimize.rs`)
+
+在活跃性分析之前运行的单遍前向扫描优化器，对齐 QEMU 的 `tcg/optimize.c`。使用 per-temp `TempInfo` 追踪常量值和拷贝源。
+
+**数据结构**：
+
+```rust
+struct TempInfo {
+    is_const: bool,
+    val: u64,
+    copy_of: Option<TempIdx>,  // canonical copy source
+}
+```
+
+初始化时从已有的 `TempKind::Const` temp 中读取常量信息。
+
+**优化类别**：
+
+| 类别 | 触发条件 | 操作 |
+|------|---------|------|
+| 拷贝传播 | 输入 temp 有 `copy_of` | 替换为源 temp |
+| 常量折叠（一元） | Neg/Not 输入为常量 | → `Mov dst, const` |
+| 常量折叠（二元） | Add/Sub/Mul/And/Or/Xor/AndC/Shl/Shr/Sar/RotL/RotR 两输入均为常量 | → `Mov dst, const` |
+| 常量折叠（类型转换） | ExtI32I64/ExtUI32I64/ExtrlI64I32/ExtrhI64I32 输入为常量 | → `Mov dst, const` |
+| 代数简化 | 一个输入为常量（0, 1, -1） | `x+0→x`, `x*0→0`, `x&-1→x` 等 |
+| 同操作数恒等式 | 两输入相同 | `x&x→x`, `x^x→0`, `x-x→0` |
+| 分支折叠 | BrCond 两输入均为常量 | 恒真→Br, 恒假→Nop |
+| 强度削减 | `0 - x` | → `Neg x` |
+
+**BB 边界处理**：遇到 SetLabel/Br/ExitTb/GotoTb/GotoPtr/Call 时清除所有拷贝关系，因为跨 BB 的拷贝信息不可靠。
+
+**类型掩码**：I32 操作结果截断到 32 位（`val & 0xFFFF_FFFF`），I64 保持 64 位。
+
+**Op 替换策略**：优化后的 op 原地替换——常量折叠结果改为 `Mov dst, const_temp`，代数简化改为 `Mov dst, surviving_input`，恒假分支改为 `Nop`，恒真分支改为 `Br`。
+
+**关键设计决策**：`replace_with_mov` 使用保守策略——仅 `invalidate_one(dst)` 而非 `set_copy(dst, src)`。这避免了源 temp 被后续 op 重定义时目标 temp 保留过期常量信息的 bug。只有显式的 `Mov` op（`fold_mov`）才建立拷贝关系。
+
+### 5.3 活跃性分析 (`liveness.rs`)
 
 反向遍历 ops 列表，为每个 op 计算 `LifeData`，标记哪些参数在
 该 op 之后死亡（dead）以及哪些全局变量需要同步回内存（sync）。
@@ -373,13 +410,13 @@ type 和 args 布局。
      若为全局变量则标记 sync；然后 `temp_state[tidx] = true`
 4. 将计算的 `LifeData` 写回 `op.life`
 
-### 5.3 寄存器分配器 (`regalloc.rs`)
+### 5.4 寄存器分配器 (`regalloc.rs`)
 
 约束驱动的贪心逐 op 分配器，前向遍历 ops 列表，对齐 QEMU 的
 `tcg_reg_alloc_op()`。MVP 不支持溢出（spill）——14 个可分配
 GPR 对简单 TB 足够。
 
-#### 5.3.1 架构概述
+#### 5.4.1 架构概述
 
 QEMU 的寄存器分配器 `tcg_reg_alloc_op()`（`tcg/tcg.c`）是完全
 通用的——不含任何 per-opcode 分支。每个 opcode 的特殊需求（如
@@ -405,7 +442,7 @@ tcg-rs 的 `regalloc_op()` 对齐这一架构：
 这意味着新增 opcode 时只需在约束表中添加一行，分配器和 codegen
 无需任何修改。
 
-#### 5.3.2 分配器状态
+#### 5.4.2 分配器状态
 
 ```rust
 struct RegAllocState {
@@ -444,7 +481,7 @@ struct RegAllocState {
 全局变量和固定 temp 不会进入 Dead 状态——`temp_dead()` 对
 它们是 no-op。
 
-#### 5.3.3 主循环分派
+#### 5.4.3 主循环分派
 
 `regalloc_and_codegen()` 前向遍历 ops 列表，按 opcode 分派：
 
@@ -465,7 +502,7 @@ sync globals（分支目标可能是另一个 BB），而通用路径的 sync �
 emit 之后。此外 BrCond 的前向引用需要在 emit 之后记录
 `label.add_use()`。
 
-#### 5.3.4 与 QEMU 的差异
+#### 5.4.4 与 QEMU 的差异
 
 | 方面 | QEMU | tcg-rs |
 |------|------|--------|
@@ -475,12 +512,13 @@ emit 之后。此外 BrCond 的前向引用需要在 emit 之后记录
 | 常量输入 | 可内联到指令编码 | 必须先 `movi` 到寄存器 |
 | 内存输入 | 部分指令支持 `[mem]` 操作数 | 必须先 `ld` 到寄存器 |
 
-### 5.4 流水线编排 (`translate.rs`)
+### 5.5 流水线编排 (`translate.rs`)
 
 将各阶段串联为完整流水线：
 
 ```
 translate():
+    optimize(ctx)
     liveness_analysis(ctx)
     tb_start = buf.offset()
     regalloc_and_codegen(ctx, backend, buf)
@@ -500,7 +538,7 @@ translate_and_execute():
 - RSI = TB 代码地址（prologue 跳转到此处）
 - 返回值 RAX = `exit_tb` 的值
 
-### 5.5 端到端集成测试
+### 5.6 端到端集成测试
 
 `tests/src/integration/mod.rs` 使用最小 RISC-V CPU 状态
 验证完整流水线：
@@ -786,6 +824,7 @@ struct GuestSpace {
 | `tcg_out_goto_ptr`            | `X86_64CodeGen::emit_goto_ptr` | `backend/src/x86_64/emitter.rs` |
 | `tcg_gen_op*` (IR emission)   | `Context::gen_*`               | `core/src/ir_builder.rs`        |
 | `liveness_pass_1`             | `liveness_analysis()`          | `backend/src/liveness.rs`       |
+| `tcg_optimize`                | `optimize()`                   | `backend/src/optimize.rs`       |
 | `tcg_reg_alloc_op`            | `regalloc_op()`                | `backend/src/regalloc.rs`       |
 | `TCGArgConstraint`            | `ArgConstraint`                | `backend/src/constraint.rs`     |
 | `C_O*_I*` macros              | `o1_i2()` / `o1_i2_alias()` etc. | `backend/src/constraint.rs`  |

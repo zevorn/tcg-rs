@@ -5,19 +5,19 @@
 
 A Rust reimplementation of [QEMU](https://www.qemu.org/)'s **TCG** (Tiny Code Generator) — the dynamic binary translation engine that converts guest architecture instructions into host machine code at runtime.
 
-> **Status**: The complete translation pipeline is working end-to-end — RISC-V guest instructions are decoded via a decodetree-generated decoder, translated to TCG IR, optimized through liveness analysis, register-allocated, compiled to x86-64 machine code, and executed. MTTCG execution, direct TB chaining, and linux-user ELF loading with syscall emulation are operational. A differential testing framework validates correctness against QEMU.
+> **Status**: The complete translation pipeline is working end-to-end — RISC-V guest instructions are decoded via a decodetree-generated decoder, translated to TCG IR, optimized (constant folding, copy propagation, algebraic simplification), register-allocated, compiled to x86-64 machine code, and executed. MTTCG execution, direct TB chaining, and linux-user ELF loading with syscall emulation are operational. A differential testing framework validates correctness against QEMU.
 
 ## Overview
 
 tcg-rs aims to provide a clean, safe, and modular Rust implementation of QEMU's TCG subsystem. The project follows QEMU's proven architecture while leveraging Rust's type system, memory safety, and trait-based extensibility.
 
 ```
-┌──────────────┐    ┌───────────────┐    ┌──────────────┐    ┌──────────┐    ┌──────────────────┐    ┌─────────┐
-│ Guest Binary │───→│ Frontend      │───→│ IR Builder   │───→│ Liveness │───→│ RegAlloc+Codegen │───→│ Execute │
-│ (RISC-V)     │    │ (decodetree   │    │ (gen_*)      │    │ Analysis │    │ (x86-64)         │    │ (JIT)   │
-└──────────────┘    │  + trans_*)   │    └──────────────┘    └──────────┘    └──────────────────┘    └─────────┘
+┌──────────────┐    ┌───────────────┐    ┌──────────────┐    ┌───────────┐    ┌──────────┐    ┌──────────────────┐    ┌─────────┐
+│ Guest Binary │───→│ Frontend      │───→│ IR Builder   │───→│ Optimizer │───→│ Liveness │───→│ RegAlloc+Codegen │───→│ Execute │
+│ (RISC-V)     │    │ (decodetree   │    │ (gen_*)      │    │           │    │ Analysis │    │ (x86-64)         │    │ (JIT)   │
+└──────────────┘    │  + trans_*)   │    └──────────────┘    └───────────┘    └──────────┘    └──────────────────┘    └─────────┘
                     └───────────────┘
-                     tcg-frontend         tcg-core            tcg-backend     tcg-backend             tcg-backend
+                     tcg-frontend         tcg-core             tcg-backend     tcg-backend     tcg-backend             tcg-backend
 ```
 
 ## Crate Structure
@@ -25,7 +25,7 @@ tcg-rs aims to provide a clean, safe, and modular Rust implementation of QEMU's 
 | Crate | Status | Description |
 |-------|--------|-------------|
 | `tcg-core` | Implemented | IR definitions (opcodes, types, temps, ops, context, labels, TBs) + IR builder (`gen_*` methods) |
-| `tcg-backend` | Implemented | Liveness analysis, constraint system, register allocator, x86-64 codegen, translation pipeline |
+| `tcg-backend` | Implemented | IR optimizer, liveness analysis, constraint system, register allocator, x86-64 codegen, translation pipeline |
 | `tcg-exec` | Implemented | MTTCG-capable execution loop, TB store, direct chaining, per-vCPU jump cache, execution stats |
 | `tcg-linux-user` | Implemented | ELF loader, guest address space, Linux syscall emulation, `tcg-riscv64` runner |
 | `decodetree` | Implemented | QEMU-style `.decode` file parser and Rust code generator for instruction decoders |
@@ -64,10 +64,11 @@ cargo fmt --check            # Format check
 
 ### tcg-backend
 
+- **IR optimizer** (`optimize.rs`): Single-pass optimizer running before liveness analysis — constant folding (unary, binary, type-conversion ops), copy propagation, algebraic simplification (identity/annihilator rules), same-operand identities, branch constant folding (BrCond → Br/Nop)
 - **Constraint system** (`constraint.rs`): `ArgConstraint`/`OpConstraint` types with builder functions (`o1_i2_alias`, `o1_i2_alias_fixed`, `n1_i2`, etc.)
 - **Liveness analysis** (`liveness.rs`): Backward pass computing dead/sync flags per arg
 - **Register allocator** (`regalloc.rs`): Constraint-driven greedy allocator mirroring QEMU's `tcg_reg_alloc_op()` — alias reuse, forced eviction, post-input fixup
-- **Translation pipeline** (`translate.rs`): `translate_and_execute()` chains liveness → regalloc+codegen → JIT execution
+- **Translation pipeline** (`translate.rs`): `translate_and_execute()` chains optimize → liveness → regalloc+codegen → JIT execution
 - **x86-64 backend**:
   - Full GPR instruction encoder (emitter.rs): arithmetic, shifts, data movement, memory, mul/div, bit ops, branches, setcc/cmovcc
   - Constraint table (constraints.rs): per-opcode register constraints aligned with QEMU's `tcg_target_op_def()`
