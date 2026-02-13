@@ -1,4 +1,5 @@
 pub mod context;
+pub mod dump;
 pub mod ir_builder;
 pub mod label;
 pub mod op;
