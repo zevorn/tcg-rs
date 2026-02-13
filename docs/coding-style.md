@@ -177,3 +177,18 @@ fn arith_add_rr_64() {
 - 公开类型通过 `pub use` 在 crate 根导出
 - 相关功能放在同一文件，文件内按逻辑分节
 - 使用 `// -- Section name --` 分隔文件内的逻辑区域
+
+## 10. MTTCG 与性能代码约束
+
+- 并发路径优先使用“共享状态 + 每线程私有状态”拆分，避免热路径共享锁。
+- 新增并发字段时，必须在注释中写清：
+  - 谁持有写权限（例如 `translate_lock`）
+  - 读路径是否 lock-free
+  - 可见性保证（Acquire/Release/Relaxed 的选择理由）
+- 性能优化提交必须附带可复现基准命令，至少包含：
+  - `tcg-riscv64` 对 `dhrystone`
+  - `qemu-riscv64` 同程序对照
+- 涉及 TB 链路逻辑时必须补充：
+  - 并发正确性测试（`tests/src/exec/mttcg.rs`）
+  - 回归测试（至少一个 linux-user guest 测题）
+- 调试辅助输出统一走已有统计入口（`TCG_STATS=1`），避免在热路径直接打印日志。

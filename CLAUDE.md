@@ -6,6 +6,15 @@
 
 tcg-rs 是 QEMU TCG（Tiny Code Generator）的 Rust 重新实现——一个动态二进制翻译引擎，在运行时将客户架构指令转换为宿主机器码。参考实现位于 `~/qemu/tcg/`、`~/qemu/accel/tcg/` 和 `~/qemu/include/tcg/`。
 
+**当前状态快照（2026-02-12）**：
+
+- 已有可用 MTTCG 执行路径：`cpu_exec_loop_mt`、共享 `SharedState`、
+  每 vCPU `PerCpuState`。
+- 已支持 `linux-user` 端到端执行与 guest 参数传递，包含 dhrystone
+  与 `argv_echo` 测题。
+- 性能关键路径已包含：jump cache、TB hash、`next_tb_hint`、
+  `goto_tb` 链路 patch、`exit_target` 原子缓存。
+
 ## 构建与开发命令
 
 ```bash
@@ -70,14 +79,13 @@ Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen
 
 | Crate | 职责 | QEMU 参考 |
 |-------|------|----------|
-| `tcg-core` | IR 定义：opcodes、types、temps、TCGOp、TCGContext、labels | `include/tcg/tcg.h`、`tcg/tcg-opc.h`、`tcg/tcg-common.c` |
-| `tcg-ir` | IR 生成 API（`tcg_gen_*` 等价物），op 发射 | `tcg/tcg-op.c`、`tcg/tcg-op-ldst.c`、`tcg/tcg-op-vec.c`、`tcg/tcg-op-gvec.c` |
-| `tcg-opt` | IR 优化器：常量/拷贝传播、DCE、代数化简 | `tcg/optimize.c` |
-| `tcg-backend` | 宿主代码生成 trait + 各架构后端 | `tcg/tcg.c`（codegen 部分）、`tcg/<arch>/tcg-target.c.inc` |
-| `tcg-frontend` | 客户指令解码 trait + 各架构解码器 | `target/<arch>/translate.c`、`accel/tcg/translator.c` |
-| `tcg-exec` | CPU 执行循环、TB 缓存（jump cache + hash table）、TB 链接/失效 | `accel/tcg/cpu-exec.c`、`accel/tcg/translate-all.c`、`accel/tcg/tb-maint.c` |
-| `tcg-mmu` | 软件 TLB、客户内存访问（快速/慢速路径） | `accel/tcg/cputlb.c` |
-| `tcg-runtime` | 生成代码调用的运行时辅助函数 | `accel/tcg/tcg-runtime.c`、`accel/tcg/tcg-runtime-gvec.c` |
+| `tcg-core` | IR 定义：opcodes、types、temps、TCGOp、TCGContext、labels、TB 元数据 | `include/tcg/tcg.h`、`tcg/tcg-opc.h` |
+| `tcg-backend` | 活跃性分析、约束系统、寄存器分配、x86-64 代码生成 | `tcg/tcg.c`（codegen 部分）、`tcg/i386/tcg-target.c.inc` |
+| `tcg-frontend` | 客户指令解码框架与 RISC-V 翻译器 | `target/riscv/translate.c`、`accel/tcg/translator.c` |
+| `tcg-exec` | MTTCG 执行循环、TB 缓存（jump cache + hash）、TB 链路/失效 | `accel/tcg/cpu-exec.c`、`accel/tcg/translate-all.c`、`accel/tcg/tb-maint.c` |
+| `tcg-linux-user` | 用户态 ELF 加载、地址空间与 syscall 仿真 | `linux-user/main.c`、`linux-user/elfload.c`、`linux-user/syscall.c` |
+| `decodetree` | QEMU 风格 `.decode` 解析器与 Rust 解码器生成器 | `scripts/decodetree.py`、`docs/devel/decodetree.rst` |
+| `tests` | 分层测试（单元、集成、difftest、MTTCG、linux-user） | `tests/tcg/` + `linux-user/tests/` 设计思路 |
 
 ### 核心数据结构（C → Rust 映射）
 
@@ -104,6 +112,12 @@ Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen
 4. **执行**：跳转到生成的宿主代码
 5. **链接**：修补 TB 间的直接跳转（`goto_tb`/`exit_tb` 用于直接分支，`lookup_and_goto_ptr` 用于间接分支）
 6. **失效**：自修改代码、页面取消映射或缓存满时——解链并移除
+
+当前 tcg-rs 还实现了两个额外热路径优化：
+
+- `next_tb_hint`：执行循环在同一条链路上复用上一次目标 TB，减少重复查找。
+- `exit_target`：对 `TB_EXIT_NOCHAIN` 场景缓存最近目标 TB（原子读写），降低
+  间接跳转的 hash 查找频率。
 
 ### 前端 Trait 设计
 
@@ -177,6 +191,33 @@ x86-64 后端位于 `backend/src/x86_64/`，包含三个文件：
 - **后端示例**：`~/qemu/tcg/aarch64/`、`~/qemu/tcg/i386/`、`~/qemu/tcg/riscv/`
 - **前端示例**：`~/qemu/target/riscv/translate.c`、`~/qemu/target/arm/tcg/translate.c`
 - **Decodetree**：`~/qemu/docs/devel/decodetree.rst`（基于模式的指令解码器生成器）
+
+## 性能优化与瓶颈
+
+已落地优化点：
+
+- 每 vCPU `JumpCache`（4096）+ 全局 TB hash 的双层查找。
+- 并发翻译双重检查（拿到 `translate_lock` 后再查一次 hash）。
+- `goto_tb` 槽位链路 patch（直接 TB→TB 跳转）。
+- `TB_EXIT_NOCHAIN` 的 `exit_target` 原子缓存。
+
+当前主要瓶颈：
+
+1. `translate_lock` 是全局串行点，高并发翻译时会放大竞争。
+2. linux-user syscall 路径仍偏串行，系统调用密集型 workload 提升有限。
+3. 静态链接 guest 二进制（如 dhrystone）启动和装载成本较高。
+
+## 调试手段
+
+- `TCG_STATS=1 target/release/tcg-riscv64 <elf> [args...]`：
+  打印 TB 命中率、链路 patch 次数、hint 命中等统计。
+- `cargo test -p tcg-tests exec::mttcg -- --nocapture`：
+  优先复现并发相关问题。
+- `RUST_BACKTRACE=1 cargo test -p tcg-tests linux_user::guest_dhrystone`：
+  复现并定位 guest 执行崩溃。
+- 性能对比建议命令：
+  - `TIMEFORMAT=%R; time target/release/tcg-riscv64 target/guest/riscv64/dhrystone`
+  - `TIMEFORMAT=%R; time qemu-riscv64 target/guest/riscv64/dhrystone`
 
 ## 代码风格
 

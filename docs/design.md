@@ -1,6 +1,18 @@
 # tcg-rs 设计文档
 
-## 1. Workspace 分层
+## 1. 概述
+
+```
+Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen) → Host Binary
+                                      ↓
+                              TranslationBlock Cache
+                                      ↓
+                              Execution Loop (MTTCG)
+                                      ↓
+                              linux-user (ELF + syscall)
+```
+
+## 2. Workspace 分层
 
 ```
 tcg-rs/
@@ -8,16 +20,33 @@ tcg-rs/
 ├── backend/        # 代码生成层：依赖 tcg-core + libc
 ├── decodetree/     # 解码器生成器：解析 .decode 文件，生成 Rust 解码器
 ├── frontend/       # 客户指令解码层：依赖 tcg-core + decodetree（构建时）
-└── tests/          # 测试层：依赖 tcg-core + tcg-backend + tcg-frontend
+├── exec/           # 执行层：MTTCG 执行循环、TB 缓存、链路管理
+├── linux-user/     # 用户态运行层：ELF 加载、syscall、guest 空间
+└── tests/          # 测试层：单元、集成、difftest、MTTCG、linux-user
 ```
 
 **设计意图**：遵循 QEMU 的 `include/tcg/` (定义) 与 `tcg/` (实现) 分离原则。`tcg-core` 是纯粹的数据定义，不包含任何平台相关代码或 `unsafe`，`tcg-frontend` 和未来的 `tcg-opt` 都只需依赖 `tcg-core`。`decodetree` 是独立的构建时工具 crate，解析 QEMU 风格的 `.decode` 文件并生成 Rust 解码器代码。测试独立成 crate 是为了保持源码文件干净，且外部 crate 测试能验证公共 API 的完整性。
 
+### 2.1 MTTCG 支持与执行流程对齐
+
+当前执行层已经支持 MTTCG 核心模型，路径位于 `exec/src/exec_loop.rs`：
+
+1. `cpu_exec_loop_mt(shared, per_cpu, cpu)` 作为多线程入口；
+2. 查找顺序：`JumpCache`（每 vCPU）→ 全局 TB hash；
+3. miss 时进入 `tb_gen_code`，由 `translate_lock` 串行翻译；
+4. TB 执行后按退出协议分流：
+   - `TB_EXIT_IDX0/1`：可链路出口，尝试 `tb_add_jump` patch；
+   - `TB_EXIT_NOCHAIN`：间接出口，走 `exit_target` 缓存 + 查表；
+   - 其他值：真实异常/系统退出。
+
+这与 QEMU 的 `cpu_exec` / `tb_lookup` / `tb_gen_code` / `cpu_tb_exec`
+主流程保持同构，当前重点放在"正确性优先 + 热路径可观测"。
+
 ---
 
-## 2. tcg-core 核心数据结构
+## 3. tcg-core 核心数据结构
 
-### 2.1 Type 系统 (`types.rs`)
+### 3.1 Type 系统 (`types.rs`)
 
 ```
 Type: I32 | I64 | I128 | V64 | V128 | V256
@@ -27,7 +56,7 @@ Type: I32 | I64 | I128 | V64 | V128 | V256
 - 整数/向量分类方法 (`is_integer()` / `is_vector()`) 用于后续优化器和后端的类型分派
 - `TYPE_COUNT = 6` 配合 Context 中的 `const_table: [HashMap; TYPE_COUNT]` 实现按类型分桶的常量去重
 
-### 2.2 Cond 条件码 (`types.rs`)
+### 3.2 Cond 条件码 (`types.rs`)
 
 ```
 Cond: Never=0, Always=1, Eq=8, Ne=9, Lt=10, ..., TstEq=18, TstNe=19
@@ -37,7 +66,7 @@ Cond: Never=0, Always=1, Eq=8, Ne=9, Lt=10, ..., TstEq=18, TstNe=19
 - `invert()` 和 `swap()` 都是 involution（自逆），测试中专门验证了这一性质
 - `TstEq`/`TstNe` 是 QEMU 7.x+ 新增的 test-and-branch 条件，提前纳入
 
-### 2.3 MemOp (`types.rs`)
+### 3.3 MemOp (`types.rs`)
 
 ```
 MemOp(u16) — bit-packed: [1:0]=size, [2]=sign, [3]=bswap, [6:4]=align
@@ -46,7 +75,7 @@ MemOp(u16) — bit-packed: [1:0]=size, [2]=sign, [3]=bswap, [6:4]=align
 - 位域打包设计直接映射 QEMU 的 `MemOp`，保持二进制兼容
 - 提供语义化构造器 `ub()/sb()/uw()/sw()/ul()/sl()/uq()` 避免手写位操作
 
-### 2.4 RegSet (`types.rs`)
+### 3.4 RegSet (`types.rs`)
 
 ```
 RegSet(u64) — 64-bit bitmap, supports up to 64 host registers
@@ -55,7 +84,7 @@ RegSet(u64) — 64-bit bitmap, supports up to 64 host registers
 - 用 `u64` 位图而非 `HashSet` 或 `Vec`，因为寄存器分配是热路径，位操作（union/intersect/subtract）比集合操作快一个数量级
 - `const fn` 方法允许在编译期构造常量寄存器集（如 `RESERVED_REGS`）
 
-### 2.5 统一多态 Opcode (`opcode.rs`)
+### 3.5 统一多态 Opcode (`opcode.rs`)
 
 ```
 enum Opcode { Mov, Add, Sub, ..., Count }  // 158 variants + sentinel
@@ -70,7 +99,7 @@ QEMU 原始设计中 `add_i32` 和 `add_i64` 是不同的 opcode。我们改为�
 3. 后端通过 `op.op_type` 选择 32/64 位指令编码，逻辑更清晰
 4. `OpFlags::INT` 标记哪些 opcode 是多态的，非多态的（如 `ExtI32I64`）有固定类型
 
-### 2.6 OpDef 静态表 (`opcode.rs`)
+### 3.6 OpDef 静态表 (`opcode.rs`)
 
 ```rust
 pub static OPCODE_DEFS: [OpDef; Opcode::Count as usize] = [ ... ];
@@ -80,7 +109,7 @@ pub static OPCODE_DEFS: [OpDef; Opcode::Count as usize] = [ ... ];
 - 每个 `OpDef` 记录 `nb_oargs/nb_iargs/nb_cargs/flags`，这是优化器和寄存器分配器的核心元数据
 - `OpFlags` 用位标志而非 `Vec<Flag>`，因为标志检查在编译循环中极其频繁
 
-### 2.7 Temp 临时变量 (`temp.rs`)
+### 3.7 Temp 临时变量 (`temp.rs`)
 
 ```
 TempKind: Ebb | Tb | Global | Fixed | Const
@@ -98,7 +127,7 @@ TempKind: Ebb | Tb | Global | Fixed | Const
 
 `Temp` 结构体同时承载 IR 属性（`ty`, `kind`）和寄存器分配状态（`val_type`, `reg`, `mem_coherent`），这是 QEMU 的设计——避免额外的 side table 查找。
 
-### 2.8 Label 前向引用 (`label.rs`)
+### 3.8 Label 前向引用 (`label.rs`)
 
 ```
 Label { present, has_value, value, uses: Vec<LabelUse> }
@@ -109,7 +138,7 @@ LabelUse { offset, kind: RelocKind::Rel32 }
 - `uses` 记录所有未解析的引用位置，`set_value()` 时后端遍历 `uses` 做 back-patching
 - `RelocKind` 目前只有 `Rel32`（x86-64 的 RIP-relative 32 位位移），未来扩展 AArch64 时加 `Adr21` 等
 
-### 2.9 Op IR 操作 (`op.rs`)
+### 3.9 Op IR 操作 (`op.rs`)
 
 ```rust
 struct Op {
@@ -126,7 +155,7 @@ struct Op {
 - `oargs()/iargs()/cargs()` 通过 `OpDef` 的参数计数做切片，零成本抽象
 - `LifeData(u32)` 用 2 bit per arg 编码 dead/sync 状态，紧凑且高效
 
-### 2.10 Context 翻译上下文 (`context.rs`)
+### 3.10 Context 翻译上下文 (`context.rs`)
 
 ```rust
 struct Context {
@@ -145,26 +174,39 @@ struct Context {
 - **常量去重**：`const_table` 按类型分桶，相同 `(type, value)` 的常量只创建一个 Temp。QEMU 中这是重要的内存优化，因为很多指令共享相同的立即数（0, 1, -1 等）
 - **断言保护**：`new_global()` 和 `new_fixed()` 要求在任何局部变量分配之前调用，通过 `assert_eq!(temps.len(), nb_globals)` 强制执行
 
-### 2.11 TranslationBlock (`tb.rs`)
+### 3.11 TranslationBlock (`tb.rs`)
 
 ```rust
 struct TranslationBlock {
-    pc, flags, cflags,          // 查找键
-    host_offset, host_size,     // 生成的宿主代码位置
-    jmp_insn_offset: [Option<u32>; 2],   // goto_tb 跳转指令偏移
-    jmp_reset_offset: [Option<u32>; 2],  // 解链时的重置偏移
+    // immutable after creation
+    pc, flags, cflags,
+    host_offset, host_size,
+    jmp_insn_offset: [Option<u32>; 2],
+    jmp_reset_offset: [Option<u32>; 2],
+    // mutable chaining state
+    jmp: Mutex<TbJmpState>,
+    invalid: AtomicBool,
+    exit_target: AtomicUsize,
 }
 ```
 
-- **双出口设计**：每个 TB 最多 2 个直接跳转出口（对应条件分支的 taken/not-taken），`jmp_insn_offset` 记录跳转指令位置用于 TB chaining 时原子修补
-- **JumpCache**：`Box<[Option<usize>; 4096]>` 直接映射缓存，`(pc >> 2) & 0xFFF` 索引，O(1) 查找。用 `Box` 避免 4096 * 8 = 32KB 在栈上分配
-- **哈希函数**：`pc * 0x9e3779b97f4a7c15 ^ flags`，黄金比例常数确保良好的分布
+- **双出口 + NoChain 协议**：`TB_EXIT_IDX0/1` 走可链路路径，
+  `TB_EXIT_NOCHAIN` 走间接路径；真实异常退出值从 `TB_EXIT_MAX`
+  开始，避免协议冲突。
+- **并发链路状态**：`jmp` 维护入边/出边关系，用于 TB 失效时解链；
+  `invalid` 使用原子位做 lock-free 快速检查。
+- **间接目标缓存**：`exit_target` 为 `TB_EXIT_NOCHAIN` 提供最近
+  目标 TB 缓存，减少 hash 查找开销。
+- **JumpCache**：`Box<[Option<usize>; 4096]>` 直接映射缓存，
+  `(pc >> 2) & 0xFFF` 索引，O(1) 查找。
+- **哈希函数**：`pc * 0x9e3779b97f4a7c15 ^ flags`，黄金比例常数
+  确保分布稳定。
 
 ---
 
-## 3. tcg-backend 代码生成层
+## 4. tcg-backend 代码生成层
 
-### 3.1 CodeBuffer (`code_buffer.rs`)
+### 4.1 CodeBuffer (`code_buffer.rs`)
 
 ```
 mmap(PROT_READ|PROT_WRITE) → emit code → mprotect(PROT_READ|PROT_EXEC)
@@ -174,7 +216,7 @@ mmap(PROT_READ|PROT_WRITE) → emit code → mprotect(PROT_READ|PROT_EXEC)
 - `emit_u8/u16/u32/u64/bytes` + `patch_u32` 覆盖了所有 x86-64 指令编码需求
 - `write_unaligned` 处理非对齐写入（x86 允许，但 ARM 不允许——未来需要注意）
 
-### 3.2 HostCodeGen trait (`lib.rs`)
+### 4.2 HostCodeGen trait (`lib.rs`)
 
 ```rust
 trait HostCodeGen {
@@ -190,9 +232,9 @@ trait HostCodeGen {
 
 - Trait-based 而非条件编译，允许同一二进制支持多后端（测试/模拟场景）
 - `init_context()` 让后端向 Context 注入平台特定配置（保留寄存器、栈帧布局）
-- `op_constraint()` 返回每个 opcode 的寄存器约束，供通用寄存器分配器消费（见 3.3）
+- `op_constraint()` 返回每个 opcode 的寄存器约束，供通用寄存器分配器消费（见 4.3）
 
-### 3.3 约束系统 (`constraint.rs`)
+### 4.3 约束系统 (`constraint.rs`)
 
 ```rust
 struct ArgConstraint {
@@ -213,7 +255,7 @@ struct OpConstraint {
 **约束类型**：
 
 | 约束 | 含义 | QEMU 等价 | 典型用途 |
-|------|------|-----------|---------|
+|------|------|-----------|---------
 | `oalias` | 输出复用输入的寄存器 | `"0"` (alias) | 破坏性二元运算 (SUB/AND/...) |
 | `ialias` | 输入可被输出复用 | 对应 oalias 的输入端 | 与 oalias 配对 |
 | `newreg` | 输出不得与任何输入重叠 | `"&"` (newreg) | SetCond (setcc 只写低字节) |
@@ -233,7 +275,7 @@ struct OpConstraint {
 | `o2_i3_fixed(o0, o1, i2)` | 双固定输出 + 双别名 | DivS2/DivU2 (RAX:RDX) |
 | `o1_i4_alias2(o0, i0..i3)` | 输出别名 input2 | MovCond (CMOV) |
 
-### 3.4 x86-64 栈帧布局 (`regs.rs`)
+### 4.4 x86-64 栈帧布局 (`regs.rs`)
 
 ```
 高地址
@@ -259,7 +301,7 @@ struct OpConstraint {
 - `FRAME_SIZE` 编译期计算并 16 字节对齐，满足 System V ABI 要求
 - `TCG_AREG0 = RBP`：env 指针固定在 RBP，匹配 QEMU 约定。所有 TB 代码通过 RBP 访问 CPUState
 
-### 3.5 Prologue/Epilogue (`emitter.rs`)
+### 4.5 Prologue/Epilogue (`emitter.rs`)
 
 **Prologue**:
 
@@ -275,7 +317,7 @@ struct OpConstraint {
 
 这个双入口设计避免了 `exit_tb(0)` 时多余的 `mov rax, 0` 指令。
 
-### 3.6 TB 控制流指令
+### 4.6 TB 控制流指令
 
 - **`exit_tb(val)`**：val==0 时直接 `jmp epilogue_return_zero`；否则 `mov rax, val` + `jmp tb_ret`
 - **`goto_tb`**：发射 `E9 00000000`（JMP rel32），NOP 填充确保 disp32 字段 4 字节对齐，使得 TB chaining 时的原子修补是安全的
@@ -283,7 +325,7 @@ struct OpConstraint {
 
 ---
 
-## 4. 翻译流水线
+## 5. 翻译流水线
 
 完整的翻译流水线将 TCG IR 转换为可执行的宿主机器码：
 
@@ -293,7 +335,7 @@ Guest Binary → Frontend (decode) → IR Builder (gen_*) → Liveness → RegAl
                                                                       codegen.rs
 ```
 
-### 4.1 IR Builder (`ir_builder.rs`)
+### 5.1 IR Builder (`ir_builder.rs`)
 
 `impl Context` 上的 `gen_*` 方法，将高层操作转换为 `Op` 并追加到
 ops 列表。每个方法创建 `Op::with_args()` 并设置正确的 opcode、
@@ -314,7 +356,7 @@ type 和 args 布局。
 | TB 出口 | `gen_goto_tb/exit_tb` | (tb_idx) / (val) |
 | 边界 | `gen_insn_start` | (pc) |
 
-### 4.2 活跃性分析 (`liveness.rs`)
+### 5.2 活跃性分析 (`liveness.rs`)
 
 反向遍历 ops 列表，为每个 op 计算 `LifeData`，标记哪些参数在
 该 op 之后死亡（dead）以及哪些全局变量需要同步回内存（sync）。
@@ -331,13 +373,13 @@ type 和 args 布局。
      若为全局变量则标记 sync；然后 `temp_state[tidx] = true`
 4. 将计算的 `LifeData` 写回 `op.life`
 
-### 4.3 寄存器分配器 (`regalloc.rs`)
+### 5.3 寄存器分配器 (`regalloc.rs`)
 
 约束驱动的贪心逐 op 分配器，前向遍历 ops 列表，对齐 QEMU 的
 `tcg_reg_alloc_op()`。MVP 不支持溢出（spill）——14 个可分配
 GPR 对简单 TB 足够。
 
-#### 4.3.1 架构概述
+#### 5.3.1 架构概述
 
 QEMU 的寄存器分配器 `tcg_reg_alloc_op()`（`tcg/tcg.c`）是完全
 通用的——不含任何 per-opcode 分支。每个 opcode 的特殊需求（如
@@ -363,7 +405,7 @@ tcg-rs 的 `regalloc_op()` 对齐这一架构：
 这意味着新增 opcode 时只需在约束表中添加一行，分配器和 codegen
 无需任何修改。
 
-#### 4.3.2 分配器状态
+#### 5.3.2 分配器状态
 
 ```rust
 struct RegAllocState {
@@ -402,7 +444,7 @@ struct RegAllocState {
 全局变量和固定 temp 不会进入 Dead 状态——`temp_dead()` 对
 它们是 no-op。
 
-#### 4.3.3 主循环分派
+#### 5.3.3 主循环分派
 
 `regalloc_and_codegen()` 前向遍历 ops 列表，按 opcode 分派：
 
@@ -423,278 +465,7 @@ sync globals（分支目标可能是另一个 BB），而通用路径的 sync �
 emit 之后。此外 BrCond 的前向引用需要在 emit 之后记录
 `label.add_use()`。
 
-#### 4.3.4 通用 op 处理流程（`regalloc_op`）
-
-以 `Sub t3, t1, t2`（约束 `o1_i2_alias`）为例，详细说明
-8 个阶段：
-
-**阶段 1：处理输入**
-
-```
-for i in 0..nb_iargs:
-    arg_ct = ct.args[nb_oargs + i]
-    tidx   = op.args[nb_oargs + i]
-    required  = arg_ct.regs       // 允许的寄存器集合
-    forbidden = i_allocated       // 已分配给前面输入的寄存器
-
-    if arg_ct.ialias && is_dead(input) && !is_readonly(temp):
-        // 输入死亡且可写 → 可以复用其寄存器给输出
-        preferred = op.output_pref[alias_index]
-        reg = temp_load_to(tidx, required, forbidden, preferred)
-        i_reusable[i] = true
-    else:
-        reg = temp_load_to(tidx, required, forbidden, EMPTY)
-
-    i_regs[i] = reg
-    i_allocated |= reg
-```
-
-关键点：
-- `forbidden` 累积确保不同输入分配到不同寄存器
-- `ialias` 输入优先加载到输出偏好的寄存器（减少后续 mov）
-- `is_readonly` 检查：全局变量、固定 temp、常量不可复用
-
-**阶段 2：Fixup（重新读取 i_regs）**
-
-```
-i_allocated = EMPTY
-for i in 0..nb_iargs:
-    reg = ctx.temp(op.args[nb_oargs + i]).reg
-    i_regs[i] = reg
-    i_allocated |= reg
-```
-
-**为什么需要 fixup？** 当后面的输入分配触发驱逐时，前面输入
-的寄存器可能已经改变。典型场景：
-
-```
-Shl t3, t1, t2  (约束: o1_i2_alias_fixed(R, R, RCX))
-
-假设 t1 当前在 RCX，t2 当前在 RAX：
-  input 0 (t1): ialias, required=R → 加载到 RCX, i_regs[0]=RCX
-  input 1 (t2): fixed=RCX, required={RCX}
-    → required & ~forbidden = {RCX} & ~{RCX} = EMPTY
-    → 强制驱逐 RCX 的占用者 (t1)
-    → evict_reg: t1 是局部 → mov t1 到空闲寄存器 (如 RDX)
-    → t2 加载到 RCX, i_regs[1]=RCX
-
-此时 i_regs[0] 仍然是 RCX（过时！），但 t1 实际在 RDX。
-fixup 阶段重新读取：i_regs[0] = RDX（正确）。
-```
-
-**阶段 3：处理输出**
-
-```
-for k in 0..nb_oargs:
-    arg_ct = ct.args[k]
-    dst_tidx = op.args[k]
-
-    if arg_ct.oalias:
-        ai = arg_ct.alias_index
-        if i_reusable[ai]:
-            // 输入已死亡 → 直接复用其寄存器
-            reg = i_regs[ai]
-        else:
-            // 输入仍活跃 → 复制输入到新寄存器，
-            // 输出占据原寄存器
-            old_reg = i_regs[ai]
-            copy_reg = reg_alloc(allocatable,
-                                 i_allocated | o_allocated,
-                                 EMPTY)
-            emit mov(copy_reg, old_reg)
-            // 更新输入 temp 指向 copy_reg
-            reg = old_reg
-
-    elif arg_ct.newreg:
-        // 输出不得与任何输入重叠
-        reg = reg_alloc(required,
-                        i_allocated | o_allocated,
-                        EMPTY)
-    else:
-        // 普通输出
-        reg = reg_alloc(required, o_allocated, EMPTY)
-
-    assign(reg, dst_tidx)
-    o_regs[k] = reg
-    o_allocated |= reg
-```
-
-**oalias copy-away 示例**：
-
-```
-Sub t3, t1, t2  (oalias: output aliases input 0)
-
-假设 t1 仍然活跃（后续还有使用）：
-  → t1 在 RAX，t2 在 RBX
-  → 不能直接复用 RAX（t1 还活着）
-  → copy_reg = 分配空闲寄存器 (如 RCX)
-  → emit: mov RCX, RAX  (t1 的值保存到 RCX)
-  → t1.reg = RCX
-  → output t3 占据 RAX (原 t1 的寄存器)
-  → emit: sub RAX, RBX  (RAX = RAX - RBX)
-```
-
-**阶段 4：Fixup（输出可能驱逐/移动了输入）**
-
-```
-for i in 0..nb_iargs:
-    temp = ctx.temp(op.args[nb_oargs + i])
-    if temp.val_type == Reg:
-        i_regs[i] = temp.reg
-```
-
-输出分配可能需要特定寄存器（如 MulS2 的 RAX），导致占据该
-寄存器的输入被驱逐到其他寄存器。此 fixup 确保 `i_regs` 在
-emit 时反映输入的实际位置。
-
-**阶段 5：发射宿主代码**
-
-```
-backend.tcg_out_op(buf, ctx, op, &o_regs, &i_regs, &cargs)
-```
-
-此时所有约束已满足：
-- oalias 输出与对应输入在同一寄存器
-- 固定约束的输入在指定寄存器（如 RCX）
-- newreg 输出不与任何输入重叠
-
-codegen 可以直接发射最简指令序列。
-
-**阶段 6：释放死亡输入**
-
-```
-for i in 0..nb_iargs:
-    if life.is_dead(nb_oargs + i):
-        tidx = op.args[nb_oargs + i]
-        if tidx not in op.args[0..nb_oargs]:  // 跳过别名输出
-            temp_dead_input(tidx)
-```
-
-死亡输入在 emit 之后释放（而非之前），确保 `i_regs` 在代码
-发射期间始终有效。`temp_dead_input` 使用 `reg_to_temp` 守卫：
-仅当寄存器仍映射到该输入时才释放，避免释放已被别名输出接管
-的寄存器。
-
-**阶段 7：释放死亡输出**
-
-```
-for k in 0..nb_oargs:
-    if life.is_dead(k):
-        temp_dead(op.args[k])
-```
-
-**阶段 8：同步全局变量**
-
-```
-for i in 0..nb_iargs:
-    if life.is_sync(nb_oargs + i):
-        temp_sync(op.args[nb_oargs + i])
-```
-
-活跃性分析标记了哪些全局变量在此 op 后需要同步回内存。
-
-#### 4.3.5 寄存器分配策略（`reg_alloc`）
-
-`reg_alloc(required, forbidden, preferred)` 使用 4 级优先策略：
-
-```
-candidates = required & allocatable & ~forbidden
-
-1. preferred & candidates & free_regs  → 最优：偏好且空闲
-2. candidates & free_regs              → 次优：任意空闲
-3. candidates.first()                  → 驱逐：evict 占用者
-4. (required & allocatable).first()    → 强制驱逐（见 4.3.6）
-```
-
-第 1 级的 `preferred` 来自 `op.output_pref`，由活跃性分析
-设置，用于减少 ialias 输入到输出之间的 mov。
-
-#### 4.3.6 驱逐机制（`evict_reg`）
-
-当需要的寄存器被占用时，驱逐占用者：
-
-| 占用者类型 | 驱逐策略 |
-|-----------|---------|
-| 全局变量 | `temp_sync` 写回内存 → 标记 `Mem` → 释放寄存器 |
-| 局部 temp | `mov` 到另一个空闲寄存器 → 更新映射 |
-| 固定 temp | 不应发生（固定 temp 的寄存器不在 allocatable 中） |
-
-**强制驱逐**：当 `candidates` 为空（所有满足约束的寄存器都在
-forbidden 中），说明存在固定约束冲突。此时忽略 forbidden 集合，
-从 `required & allocatable` 中选择并驱逐。这只在固定约束场景
-发生（如 input0 占据 RCX，input1 要求 RCX）。
-
-驱逐后，被驱逐的 temp 的 `reg` 字段已更新，但调用者的
-`i_regs[]` 数组仍持有旧值。这就是 fixup 阶段存在的原因。
-
-#### 4.3.7 具体示例：Shl 的完整分配流程
-
-```
-IR:  Shl t3, t1, t2   (I64)
-约束: o1_i2_alias_fixed(R_NO_RCX, R_NO_RCX, RCX)
-  args[0] = t3 (output, oalias input 0, regs=R_NO_RCX)
-  args[1] = t1 (input, ialias output 0, regs=R_NO_RCX)
-  args[2] = t2 (input, fixed RCX)
-
-初始状态: t1 在 RAX, t2 在 RBX, t1 和 t2 均在此 op 后死亡
-```
-
-**Step 1 — 处理输入**：
-
-```
-input 0 (t1): ialias=true, dead=true, !readonly
-  required = R_NO_RCX (排除 RCX 的可分配寄存器)
-  forbidden = EMPTY
-  preferred = output_pref[0]
-  → t1 已在 RAX (满足 required) → i_regs[0] = RAX
-  → i_reusable[0] = true
-  → i_allocated = {RAX}
-
-input 1 (t2): fixed RCX
-  required = {RCX}
-  forbidden = {RAX}
-  → required & ~forbidden = {RCX} (RCX 空闲)
-  → t2 在 RBX，不满足 required
-  → temp_load_to: emit mov RCX, RBX
-  → i_regs[1] = RCX
-  → i_allocated = {RAX, RCX}
-```
-
-**Step 2 — Fixup**：
-
-```
-重新读取: t1.reg = RAX ✓, t2.reg = RCX ✓
-（本例无冲突，fixup 无变化）
-```
-
-**Step 3 — 处理输出**：
-
-```
-output 0 (t3): oalias, alias_index=0
-  i_reusable[0] = true → reg = i_regs[0] = RAX
-  → assign(RAX, t3)
-  → o_regs[0] = RAX
-```
-
-**Step 4 — Fixup + Emit**：
-
-```
-i_regs fixup: 无变化（输出未驱逐输入）
-backend.tcg_out_op(Shl, oregs=[RAX], iregs=[RAX, RCX])
-  → emit: shl RAX, cl    (一条指令，无需 mov/push/pop)
-```
-
-**Step 5 — 释放死亡输入**：
-
-```
-t1 dead, 但 t1==t3 (别名) → 跳过
-t2 dead → temp_dead_input(t2): 释放 RCX
-```
-
-`R_NO_RCX` 约束确保 input0/output 不会被分配到 RCX，从根本上
-避免了 output 与 fixed shift-count 的寄存器冲突。
-
-#### 4.3.8 与 QEMU 的差异
+#### 5.3.4 与 QEMU 的差异
 
 | 方面 | QEMU | tcg-rs |
 |------|------|--------|
@@ -704,7 +475,7 @@ t2 dead → temp_dead_input(t2): 释放 RCX
 | 常量输入 | 可内联到指令编码 | 必须先 `movi` 到寄存器 |
 | 内存输入 | 部分指令支持 `[mem]` 操作数 | 必须先 `ld` 到寄存器 |
 
-### 4.4 流水线编排 (`translate.rs`)
+### 5.4 流水线编排 (`translate.rs`)
 
 将各阶段串联为完整流水线：
 
@@ -729,7 +500,7 @@ translate_and_execute():
 - RSI = TB 代码地址（prologue 跳转到此处）
 - 返回值 RAX = `exit_tb` 的值
 
-### 4.5 端到端集成测试
+### 5.5 端到端集成测试
 
 `tests/src/integration/mod.rs` 使用最小 RISC-V CPU 状态
 验证完整流水线：
@@ -748,7 +519,7 @@ backed by `RiscvCpuState` 字段。
 **测试用例**：
 
 | 测试 | 验证内容 |
-|------|---------|
+|------|---------
 | `test_addi_x1_x0_42` | 常量加法：x1 = x0 + 42 |
 | `test_add_x3_x1_x2` | 寄存器加法：x3 = x1 + x2 |
 | `test_sub_x3_x1_x2` | 寄存器减法：x3 = x1 - x2 |
@@ -756,9 +527,98 @@ backed by `RiscvCpuState` 字段。
 | `test_beq_not_taken` | 条件分支（not-taken 路径） |
 | `test_sum_loop` | 循环：计算 1+2+3+4+5=15 |
 
-### 4.6 前端翻译框架
+---
 
-#### 4.6.1 decodetree 解码器生成器
+## 6. tcg-exec 执行层
+
+### 6.1 SharedState / PerCpuState 分离
+
+执行层将状态拆分为共享和每 CPU 两部分，对齐 MTTCG 模型：
+
+```rust
+struct SharedState<B: HostCodeGen> {
+    tb_store: TbStore,              // 全局 TB 缓存 + 哈希表
+    code_buf: UnsafeCell<CodeBuffer>, // JIT 代码缓冲区
+    backend: B,                     // 宿主代码生成器
+    code_gen_start: usize,          // prologue 之后的代码起始偏移
+    translate_lock: Mutex<TranslateGuard>, // 串行化翻译
+}
+
+struct PerCpuState {
+    jump_cache: JumpCache,  // 4096 项直接映射 TB 缓存
+    stats: ExecStats,       // 执行统计
+}
+```
+
+`SharedState` 通过 `&` 共享给所有 vCPU 线程——`code_buf` 用
+`UnsafeCell` 包装，写入路径由 `translate_lock` 保护，读取路径
+（执行生成代码、patch 跳转）无锁。`PerCpuState` 每线程独占，
+无需同步。
+
+**TbStore** 使用 `UnsafeCell<Vec<TranslationBlock>>` + `AtomicUsize`
+长度计数器实现 lock-free 读：新 TB 通过 `Acquire/Release` 语义
+发布，读者无需加锁。哈希表（32768 桶）用 `Mutex` 保护写入。
+
+### 6.2 GuestCpu trait
+
+```rust
+trait GuestCpu {
+    fn get_pc(&self) -> u64;
+    fn get_flags(&self) -> u32;
+    fn gen_code(
+        &mut self, ir: &mut Context, pc: u64, max_insns: u32,
+    ) -> u32;
+    fn env_ptr(&mut self) -> *mut u8;
+}
+```
+
+每个客户架构（如 RISC-V）实现此 trait，将前端解码与执行引擎
+解耦。`gen_code()` 负责解码客户指令并生成 TCG IR，返回翻译的
+客户字节数。`env_ptr()` 返回 CPU 状态结构指针，传递给生成的
+宿主代码（通过 RBP 访问）。
+
+### 6.3 执行循环
+
+`cpu_exec_loop_mt()` 是 MTTCG 主循环，对齐 QEMU 的 `cpu_exec`：
+
+```
+loop {
+    1. next_tb_hint 快速路径：复用上一跳目标 TB
+    2. tb_find(pc, flags):
+       jump_cache → hash table → tb_gen_code()
+    3. cpu_tb_exec(tb_idx) → raw_exit
+    4. decode_tb_exit(raw_exit) → (last_tb, exit_code)
+    5. 按 exit_code 分流：
+       0/1  → tb_add_jump() 链接 + 设置 next_tb_hint
+       NOCHAIN → exit_target 缓存 + 查表
+       ≥ MAX → 返回 ExitReason
+}
+```
+
+**tb_gen_code** 流程：检查缓冲区空间 → 获取 `translate_lock` →
+双重检查（其他线程可能已翻译）→ 分配 TB → 前端生成 IR →
+后端生成宿主代码 → 记录 `goto_tb` 偏移 → 插入哈希表和 jump cache。
+
+### 6.4 TB 生命周期
+
+```
+查找 → 未命中 → 翻译 → 缓存 → 执行 → 链接 → [失效]
+```
+
+**链接**（`tb_add_jump`）：验证源 TB 的 `jmp_insn_offset[slot]`
+有效且目标未失效 → 锁定源 TB → 调用 `backend.patch_jump()` 修改
+跳转指令 → 更新出边 `jmp_dest[slot]` → 锁定目标 TB → 添加反向边
+`jmp_list.push((src, slot))`。
+
+**失效**（`TbStore::invalidate`）：标记 `tb.invalid = true` →
+遍历入边 `jmp_list` 调用 `reset_jump()` 恢复跳转 → 清空出边
+`jmp_dest` 并从目标 TB 的 `jmp_list` 中移除 → 从哈希链中移除。
+
+---
+
+## 7. tcg-frontend 客户解码层
+
+### 7.1 decodetree 解码器生成器
 
 `decodetree` crate 实现了 QEMU 的 decodetree 工具的 Rust 版本，解析 `.decode` 文件并生成 Rust 解码器代码。
 
@@ -772,7 +632,7 @@ backed by `RiscvCpuState` 字段。
 
 **构建集成**：`frontend/build.rs` 在编译时调用 `decodetree::generate()`，输出到 `$OUT_DIR/riscv32_decode.rs`，通过 `include!` 宏引入。
 
-#### 4.6.2 TranslatorOps trait
+### 7.2 TranslatorOps trait
 
 `frontend/src/lib.rs` 定义了架构无关的翻译框架：
 
@@ -789,7 +649,7 @@ trait TranslatorOps {
 
 `translator_loop()` 实现了 QEMU `accel/tcg/translator.c` 中的翻译循环：`tb_start → (insn_start + translate_insn)* → tb_stop`。
 
-#### 4.6.3 RISC-V 前端
+### 7.3 RISC-V 前端（含浮点）
 
 **CPU 状态**（`riscv/cpu.rs`）：
 
@@ -805,7 +665,6 @@ struct RiscvCpu {
     fflags: u64,         // 浮点异常标志
     frm: u64,            // 浮点舍入模式
     ustatus: u64,        // 用户态状态寄存器
-    // uie, utvec, uscratch, uepc, ucause, utval, uip
 }
 ```
 
@@ -814,38 +673,81 @@ struct RiscvCpu {
 **指令翻译**（`riscv/trans.rs`）：实现 `Decode<Context>` trait 的 `trans_*` 方法，覆盖 RV64IMAFDC 整数、浮点和压缩指令集，使用 QEMU 风格的 `gen_xxx` 辅助函数模式：
 
 ```rust
-type BinOp = fn(&mut Context, Type, TempIdx, TempIdx, TempIdx) -> TempIdx;
+type BinOp =
+    fn(&mut Context, Type, TempIdx, TempIdx, TempIdx) -> TempIdx;
 
-fn gen_arith(&self, ir: &mut Context, a: &ArgsR, op: BinOp) -> bool;
-fn gen_arith_imm(&self, ir: &mut Context, a: &ArgsI, op: BinOp) -> bool;
-fn gen_shift_imm(&self, ir: &mut Context, a: &ArgsShift, op: BinOp) -> bool;
-fn gen_arith_w(&self, ir: &mut Context, a: &ArgsR, op: BinOp) -> bool;
-fn gen_branch(&mut self, ir: &mut Context, rs1: usize, rs2: usize, imm: i64, cond: Cond) -> bool;
+fn gen_arith(ir: &mut Context, a: &ArgsR, op: BinOp) -> bool;
+fn gen_arith_imm(ir: &mut Context, a: &ArgsI, op: BinOp) -> bool;
+fn gen_branch(
+    ir: &mut Context, rs1: usize, rs2: usize,
+    imm: i64, cond: Cond,
+) -> bool;
 ```
 
 每个 `trans_*` 方法成为一行调用，如 `trans_add → gen_arith(ir, a, Context::gen_add)`。
 
-### 4.7 测试体系
-
-| 测试类别 | 位置 | 数量 | 说明 |
-|---------|------|------|------|
-| decodetree 测试 | `tests/src/decodetree/` | 93 | 解析器、代码生成、字段提取、RVC |
-| 核心单元测试 | `tests/src/core/` | 192 | types/opcodes/temps/labels/ops/context/TBs |
-| 后端回归测试 | `tests/src/backend/` | 256 | x86-64 指令编码、代码缓冲区 |
-| 前端翻译测试 | `tests/src/frontend/mod.rs` | 126 | RV32I/RV64I/RVC/RV32F 全流水线指令测试 |
-| 差分测试 | `tests/src/frontend/difftest.rs` | 35 | 对比 QEMU qemu-riscv64 |
-| 集成测试 | `tests/src/integration/` | 105 | 端到端 IR→执行 |
-| 执行循环 | `tests/src/exec/` | 12 | TB 缓存、执行循环 |
-| linux-user | `linux-user/tests/` | 6 | ELF 加载、客户程序执行 |
-
-详细文档见 [`docs/testing.md`](testing.md)。
+**浮点支持**：RV64F/RV64D 浮点指令通过 `gen_helper_call` 调用
+`fpu.rs` 中的 C ABI 辅助函数，由后端 `regalloc_call` 处理
+caller-saved 寄存器保存/恢复。实现浮点相关用户态 CSR（`fflags`、
+`frm`、`fcsr`）及 U-mode 状态/陷阱 CSR，带 FS 状态追踪（仅在
+写入 FPR 时标记 dirty）。
 
 ---
 
-## 5. 设计权衡总结
+## 8. tcg-linux-user 用户态仿真
+
+### 8.1 ELF 加载
+
+`loader.rs` 实现 RISC-V 64 位 ELF 加载，流程：
+
+1. 读取并验证 ELF 头（`ET_EXEC` + `EM_RISCV`）
+2. 遍历 `PT_LOAD` 段，使用 `mmap_fixed` 映射到客户地址空间
+3. 复制文件数据并设置内存保护权限（RWX）
+4. `setup_stack` 构建初始栈：`argc | argv[] | NULL | envp[] | NULL | auxv[]`
+5. 返回 `ElfInfo { entry, phdr_addr, phnum, sp, brk }`
+
+栈布局遵循 Linux ABI，包含 `AT_PHDR`/`AT_ENTRY`/`AT_RANDOM` 等
+辅助向量。
+
+### 8.2 GuestSpace 地址空间
+
+```rust
+struct GuestSpace {
+    base: *mut u8,  // mmap 预留的 1 GiB 基地址
+    size: usize,    // GUEST_SPACE_SIZE = 1 << 30
+    brk: u64,       // 当前程序 break 点
+}
+```
+
+使用 `mmap(PROT_NONE)` 预留 1 GiB 连续地址空间，按需通过
+`mmap_fixed` 映射具体区域。提供 `g2h()`/`h2g()` 地址转换和
+安全的 `write_bytes`/`read_u64` 内存访问接口。
+
+栈位于 `GUEST_STACK_TOP = 0x3FFF_0000`，大小 8 MiB。
+
+### 8.3 Syscall 分派
+
+`handle_syscall()` 按 RISC-V Linux ABI 分派系统调用（调用号在
+`a7`，参数在 `a0-a5`，返回值写入 `a0`）：
+
+| 类别 | 系统调用 | 实现方式 |
+|------|---------|---------|
+| I/O | write, writev | 转发宿主 libc |
+| 进程 | exit, exit_group | 返回 `SyscallResult::Exit` |
+| 内存 | brk, mmap, mprotect | 管理客户地址空间 |
+| 文件 | fstat, readlinkat | stdio stub + 宿主转发 |
+| 系统 | uname, clock_gettime, prlimit64 | 模拟/转发 |
+| 线程 | futex | 单线程 stub |
+| 其他 | getrandom, tgkill | 确定性填零/信号处理 |
+
+主循环采用异常驱动模型：`cpu_exec_loop` 返回 `ExitReason::Exit(EXCP_ECALL)` 时进入 syscall 分派，处理完毕后 `pc += 4` 跳过 ECALL 指令继续执行。
+
+---
+
+## 9. 设计权衡总结
 
 | 决策                   | 选择                  | 理由                     |
-|------------------------|---------------------|--------------------------|
+|------------------------|---------------------|--------------------------
 | Opcode 多态 vs 分裂     | 统一多态              | 减少 40% opcode，简化优化器 |
 | Op.args 固定数组 vs Vec | 固定 `[TempIdx; 10]` | 避免堆分配，TB 内有数百个 Op |
 | RegSet 位图 vs HashSet | `u64` 位图           | 寄存器分配热路径，位操作更快  |
@@ -856,7 +758,7 @@ fn gen_branch(&mut self, ir: &mut Context, rs1: usize, rs2: usize, imm: i64, con
 
 ---
 
-## 6. QEMU 参考映射
+## 10. QEMU 参考映射
 
 | QEMU C 结构/概念               | Rust 对应                       | 文件                                 |
 |-------------------------------|--------------------------------|-------------------------------------|
@@ -899,15 +801,12 @@ fn gen_branch(&mut self, ir: &mut Context, rs1: usize, rs2: usize, imm: i64, con
 | `disas_log` (decodetree)      | `decodetree::generate()`       | `decodetree/src/lib.rs`         |
 | `target/riscv/translate.c`    | `RiscvDisasContext`            | `frontend/src/riscv/mod.rs`     |
 | `trans_rvi.c.inc` (gen_xxx)   | `gen_arith/gen_branch/...`     | `frontend/src/riscv/trans.rs`   |
-
----
-
-## 7. RISC-V 前端（RV64 用户态）
-
-- 支持 RV64F/RV64D 浮点指令，包括浮点 load/store、算术运算、
-  类型转换、比较/分类、FMA 系列（FMADD/FMSUB/FNMSUB/FNMADD）。
-- 实现浮点相关用户态 CSR（`fflags`、`frm`、`fcsr`）及 U-mode
-  状态/陷阱 CSR，带 FS 状态追踪（仅在写入 FPR 时标记 dirty）。
-- 浮点运算通过 `gen_helper_call` 调用 `fpu.rs` 中的 C ABI
-  辅助函数，由后端 `regalloc_call` 处理 caller-saved 寄存器
-  保存/恢复。
+| `cpu_exec`                    | `cpu_exec_loop_mt()`           | `exec/src/exec_loop.rs`        |
+| `tb_lookup`                   | `tb_find()`                    | `exec/src/exec_loop.rs`        |
+| `tb_gen_code`                 | `tb_gen_code()`                | `exec/src/exec_loop.rs`        |
+| `cpu_tb_exec`                 | `cpu_tb_exec()`                | `exec/src/exec_loop.rs`        |
+| `tb_add_jump`                 | `tb_add_jump()`                | `exec/src/exec_loop.rs`        |
+| `TBContext.htable`            | `TbStore`                      | `exec/src/tb_store.rs`         |
+| `linux-user/main.c`           | `LinuxCpu` + `main()`          | `linux-user/src/main.rs`       |
+| `linux-user/elfload.c`        | `load_elf()`                   | `linux-user/src/loader.rs`     |
+| `linux-user/syscall.c`        | `handle_syscall()`             | `linux-user/src/syscall.rs`    |

@@ -4,9 +4,11 @@
 - core/: IR 类型、操作码、临时变量、标签与 IR builder（gen_*）。
 - backend/: 活跃分析、约束系统、寄存器分配与 x86-64 代码生成。
 - decodetree/: QEMU 风格 .decode 文件解析器与 Rust 代码生成器。
-- frontend/: 客户指令解码框架与 RISC-V RV64I+M 前端。
-- tests/: 单元测试、后端回归、前端翻译、差分测试与端到端集成测试。
-- docs/: 设计、后端与 difftest 文档。
+- frontend/: 客户指令解码框架与 RISC-V RV64IMAFDC 前端。
+- exec/: MTTCG 执行循环、TB 缓存/链路、SharedState/PerCpuState。
+- linux-user/: ELF 加载、guest 地址空间、syscall 仿真、tcg-riscv64 运行器。
+- tests/: 单元测试、后端回归、前端翻译、差分测试、MTTCG、linux-user 端到端。
+- docs/: 设计、IR ops、后端、测试体系与代码风格文档。
 
 ## 构建、测试与开发命令
     cargo build                 # 构建全部 crate
@@ -29,6 +31,8 @@
   tests/src/integration/。
 - 前端翻译测试放在 tests/src/frontend/，差分测试（difftest）
   放在 tests/src/frontend/difftest.rs。
+- 执行循环与 MTTCG 测试放在 tests/src/exec/。
+- linux-user 端到端测试放在 tests/src/linux_user/。
 - 修复缺陷时必须补充覆盖该场景的回归测试。
 
 ## 提交与 PR 指南

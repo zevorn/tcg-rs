@@ -5,7 +5,7 @@
 
 A Rust reimplementation of [QEMU](https://www.qemu.org/)'s **TCG** (Tiny Code Generator) — the dynamic binary translation engine that converts guest architecture instructions into host machine code at runtime.
 
-> **Status**: The complete translation pipeline is working end-to-end — RISC-V guest instructions are decoded via a decodetree-generated decoder, translated to TCG IR, optimized through liveness analysis, register-allocated, compiled to x86-64 machine code, and executed. A differential testing framework validates correctness against QEMU.
+> **Status**: The complete translation pipeline is working end-to-end — RISC-V guest instructions are decoded via a decodetree-generated decoder, translated to TCG IR, optimized through liveness analysis, register-allocated, compiled to x86-64 machine code, and executed. MTTCG execution, direct TB chaining, and linux-user ELF loading with syscall emulation are operational. A differential testing framework validates correctness against QEMU.
 
 ## Overview
 
@@ -26,13 +26,11 @@ tcg-rs aims to provide a clean, safe, and modular Rust implementation of QEMU's 
 |-------|--------|-------------|
 | `tcg-core` | Implemented | IR definitions (opcodes, types, temps, ops, context, labels, TBs) + IR builder (`gen_*` methods) |
 | `tcg-backend` | Implemented | Liveness analysis, constraint system, register allocator, x86-64 codegen, translation pipeline |
+| `tcg-exec` | Implemented | MTTCG-capable execution loop, TB store, direct chaining, per-vCPU jump cache, execution stats |
+| `tcg-linux-user` | Implemented | ELF loader, guest address space, Linux syscall emulation, `tcg-riscv64` runner |
 | `decodetree` | Implemented | QEMU-style `.decode` file parser and Rust code generator for instruction decoders |
-| `tcg-frontend` | Implemented | Guest instruction decoding framework + RISC-V RV64I+M frontend (65 instructions) |
-| `tcg-tests` | Implemented | 704 tests: unit, backend regression, frontend translation, difftest (vs QEMU), and end-to-end integration |
-| `tcg-opt` | Planned | IR optimizer: constant/copy propagation, DCE |
-| `tcg-exec` | Planned | CPU execution loop, TB cache, TB linking/invalidation |
-| `tcg-mmu` | Planned | Software TLB, guest memory access |
-| `tcg-runtime` | Planned | Runtime helper functions called from generated code |
+| `tcg-frontend` | Implemented | Guest instruction decoding framework + RISC-V RV64IMAFDC frontend (184 instructions) |
+| `tcg-tests` | Implemented | 816 tests: unit, backend regression, frontend translation, difftest (vs QEMU), MTTCG, and linux-user e2e |
 
 ## Key Design Decisions
 
@@ -46,7 +44,7 @@ tcg-rs aims to provide a clean, safe, and modular Rust implementation of QEMU's 
 
 ```bash
 cargo build                  # Build all crates
-cargo test                   # Run all 704 tests
+cargo test                   # Run all 816 tests
 cargo clippy -- -D warnings  # Lint check
 cargo fmt --check            # Format check
 ```
@@ -77,13 +75,36 @@ cargo fmt --check            # Format check
   - System V ABI prologue/epilogue with `TCG_AREG0 = RBP`
   - `exit_tb`, `goto_tb` (4-byte aligned for atomic patching), `goto_ptr`
 
+### tcg-exec
+
+- **MTTCG state split**: `SharedState` (TB store + code buffer + backend) and
+  `PerCpuState` (jump cache + stats) for vCPU-local hot data.
+- **Thread-safe TB store**: lock-free read path (`AtomicUsize` length publish),
+  hash mutation lock, and per-TB jump lock for chaining edges.
+- **Execution hot path**: jump-cache hit → hash hit → translate; supports
+  `next_tb_hint`, direct chaining (`goto_tb` slots), and `exit_target` cache.
+- **Debug observability**: `ExecStats` exposes lookup hit rate, chain patch
+  counts, and hint usage; `TCG_STATS=1` prints runtime profile.
+
+### tcg-linux-user
+
+- **ELF loader + stack layout** aligned with linux-user model, including
+  `argv` propagation and auxv essentials.
+- **Guest space management** with mmap/brk handling for user-mode execution.
+- **Syscall emulation** for core Linux user-mode workflows used by tests.
+- **Runner**: `tcg-riscv64 <elf> [args...]`, shared by linux-user e2e tests.
+
 ### tcg-tests
 
 - **Unit tests**: Core data structure APIs (types, opcodes, temps, labels, ops, context, TBs)
 - **Backend regression**: x86-64 instruction encoding, codegen aliasing behavior
-- **Frontend translation**: 58 RISC-V instruction tests through the full decode→IR→codegen→execute pipeline
+- **Frontend translation**: 91 RISC-V instruction tests through the full decode→IR→codegen→execute pipeline (RV32I/RV64I/RVC/RV32F/RV64F)
 - **Difftest**: Differential testing framework comparing tcg-rs results against QEMU (qemu-riscv64 user-mode) with edge-case values
 - **Integration tests**: End-to-end pipeline with minimal RISC-V CPU state — ALU ops, branches, loops, memory access, complex multi-op sequences
+- **MTTCG tests**: concurrent lookup/translation/chaining tests under
+  `tests/src/exec/mttcg.rs` (26 tests)
+- **linux-user guest tests**: `hello`, `hello_printf`, `hello_float`,
+  `dhrystone`, `argv_echo`
 
 ### decodetree
 
@@ -95,11 +116,10 @@ cargo fmt --check            # Format check
 
 - **Translation framework** (`lib.rs`): `TranslatorOps` trait and `translator_loop()` — architecture-independent instruction translation loop
 - **RISC-V frontend** (`riscv/`):
-  - `cpu.rs`: `RiscvCpu` state (`#[repr(C)]`, 32 GPRs + PC)
-  - `mod.rs`: `RiscvDisasContext` with GPRs as TCG globals, `RiscvTranslator` implementing `TranslatorOps`
-  - `trans.rs`: 65 `trans_*` methods implementing `Decode<Context>` trait, using QEMU-style `gen_xxx` helper pattern with `BinOp` function pointers
-  - Implemented: lui, auipc, jal, jalr, branches (beq/bne/blt/bge/bltu/bgeu), ALU immediate, shifts, R-type ALU, RV64I W-suffix ops, fence, ecall, ebreak
-  - Stubs: load/store (need guest memory access), M extension (need mul/div IR ops)
+  - `cpu.rs`: `RiscvCpu` state (`#[repr(C)]`, 32 GPRs + 32 FPRs + PC + float CSRs)
+  - `mod.rs`: `RiscvDisasContext` with GPRs/FPRs as TCG globals, `RiscvTranslator` implementing `TranslatorOps`
+  - `trans.rs`: 184 `trans_*` methods implementing `Decode<Context>` trait, using QEMU-style `gen_xxx` helper pattern with `BinOp` function pointers
+  - Implemented: RV64I (full), RV64M (mul/div/rem), RV64F/RV64D (float arithmetic, load/store, conversions, comparisons, FMA), RVC (compressed), load/store (guest memory via helper calls), user-mode CSRs (fflags/frm/fcsr)
 
 ## QEMU Reference
 
@@ -114,11 +134,15 @@ This project references the following QEMU source files:
 - `target/riscv/translate.c` — RISC-V frontend translation
 - `target/riscv/insn_trans/trans_rvi.c.inc` — RV64I instruction translation helpers
 - `accel/tcg/translator.c` — `translator_loop` (architecture-independent translation loop)
+- `accel/tcg/cpu-exec.c` — execution loop, TB chaining, exit protocol
+- `accel/tcg/tb-maint.c` — TB invalidation and unlinking
 - `docs/devel/decodetree.rst` — Decodetree pattern-based instruction decoder generator
+- `docs/devel/multi-thread-tcg.rst` — MTTCG concurrency model
 
 ## Documentation
 
-- [Design Document](docs/design.md) — Architecture, data structures, constraint system, translation pipeline
+- [Design Document](docs/design.md) — Architecture, data structures, translation pipeline, exec layer, linux-user
+- [IR Ops](docs/ir-ops.md) — Opcode catalog, Op structure, IR builder API
 - [x86-64 Backend](docs/x86_64-backend.md) — Instruction encoder, constraint table, codegen dispatch
 - [Testing](docs/testing.md) — Test architecture, running tests, difftest framework, guest programs
 - [Coding Style](docs/coding-style.md) — Naming conventions, formatting rules

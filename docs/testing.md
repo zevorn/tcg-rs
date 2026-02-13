@@ -11,23 +11,23 @@ tcg-rs 采用分层测试策略，从底层数据结构到完整的用户态模�
 ```
             ┌──────────────┐
             │  Guest 程序   │  linux-user 端到端
-            │   (6 tests)  │  ELF 加载 → 执行 → 输出
+            │  (18 tests)  │  ELF 加载 → 执行 → 输出
             ├──────────────┤
             │   Difftest   │  tcg-rs vs QEMU
             │  (35 tests)  │  指令级差分对比
             ├──────────────┤
             │  前端指令测试  │  decode → IR → codegen → 执行
-            │ (109 tests)  │  RV32I/RV64I/RVC
+            │  (91 tests)  │  RV32I/RV64I/RVC/RV32F
             ├──────────────┤
             │   集成测试    │  IR → liveness → regalloc
             │ (105 tests)  │  → codegen → 执行
        ┌────┴──────────────┴────┐
        │       单元测试          │  core(192) + backend(256)
-       │      (541 tests)       │  + decodetree(93)
+       │      (567 tests)       │  + decodetree(93) + exec(26)
        └────────────────────────┘
 ```
 
-**总计：811 个测试**。
+**总计：816 个测试**。
 
 ---
 
@@ -86,12 +86,29 @@ make clean                        # 清理构建产物
 
 ```bash
 # 使用 QEMU 验证
-qemu-riscv64 tests/guest/build/riscv64/hello
-qemu-riscv64 tests/guest/build/riscv64/hello_printf
+qemu-riscv64 target/guest/riscv64/hello
+qemu-riscv64 target/guest/riscv64/hello_printf
 
 # 使用 tcg-rs 运行（需先 cargo build --release）
 cargo run --release --bin tcg-riscv64 -- \
-    tests/guest/build/riscv64/hello
+    target/guest/riscv64/hello
+```
+
+### MTTCG 与性能回归
+
+```bash
+# MTTCG 并发回归
+cargo test -p tcg-tests exec::mttcg -- --nocapture
+
+# dhrystone 端到端回归
+cargo test -p tcg-tests linux_user::guest_dhrystone -- --nocapture
+
+# 打印执行统计（TB 命中率、链路 patch、hint 命中）
+TCG_STATS=1 target/release/tcg-riscv64 target/guest/riscv64/dhrystone
+
+# 简单性能对照（本机基线）
+TIMEFORMAT=%R; time target/release/tcg-riscv64 target/guest/riscv64/dhrystone
+TIMEFORMAT=%R; time qemu-riscv64 target/guest/riscv64/dhrystone
 ```
 
 ---
@@ -142,14 +159,14 @@ tests/
 
 | 模块 | 测试数 | 占比 | 说明 |
 |------|--------|------|------|
-| backend | 256 | 31.7% | x86-64 指令编码、代码缓冲区 |
-| core | 192 | 23.8% | IR 类型、Opcode、Temp、Label、Op、Context |
-| frontend | 109 | 13.5% | RISC-V 指令执行（含 RVC） |
-| integration | 105 | 13.0% | IR → codegen → 执行全流水线 |
-| decodetree | 93 | 11.5% | .decode 解析、代码生成、字段提取 |
+| backend | 256 | 31.4% | x86-64 指令编码、代码缓冲区 |
+| core | 192 | 23.5% | IR 类型、Opcode、Temp、Label、Op、Context |
+| integration | 105 | 12.9% | IR → codegen → 执行全流水线 |
+| decodetree | 93 | 11.4% | .decode 解析、代码生成、字段提取 |
+| frontend | 91 | 11.2% | RISC-V 指令执行（含 RVC、RV32F） |
 | difftest | 35 | 4.3% | tcg-rs vs QEMU 差分对比 |
-| exec | 12 | 1.5% | TB 缓存、执行循环 |
-| linux_user | 18 | - | ELF 解析/加载、GuestSpace 与客户程序执行 |
+| exec | 26 | 3.2% | TB 缓存、执行循环、MTTCG 并发 |
+| linux_user | 18 | 2.2% | ELF 解析/加载、GuestSpace 与客户程序执行 |
 
 ---
 
@@ -240,7 +257,7 @@ cargo test -p tcg-tests integration::
 
 ---
 
-## 6. 前端指令测试（109 tests）
+## 6. 前端指令测试（91 tests）
 
 **源文件**：`tests/src/frontend/mod.rs`
 
@@ -623,19 +640,17 @@ QEMU 参考结果为 `0x65`，存在差异。
 | 二进制大小 | ~1.8 KB |
 | 预期输出 | `Hello, World!\n` |
 
-### 8.2 标准 C 程序：hello_printf
+### 8.2 标准 C 程序集合（glibc 静态链接）
 
-| 属性 | 值 |
-|------|-----|
-| 源文件 | `riscv/hello_printf.c` |
-| 编译标志 | `-static -march=rv64gc -mabi=lp64d -O2` |
-| 入口点 | `main`（链接 glibc） |
-| 库函数 | `#include <stdio.h>`, `printf()` |
-| 二进制大小 | ~711 KB |
-| 预期输出 | `Hello, World!\n` |
+| 程序 | 源文件 | 用途 | 关键检查点 |
+|------|--------|------|-----------|
+| `hello_printf` | `riscv/hello_printf.c` | 最小 `printf` 通路 | 基础 libc 输出 |
+| `hello_float` | `riscv/hello_float.c` | 浮点格式化输出 | FPU helper 与 ABI |
+| `argv_echo` | `riscv/argv_echo.c` | 参数传递回显 | guest argv 栈布局 |
+| `dhrystone` | `riscv/dhrystone/dhry_1.c` + `dhry_2.c` | 端到端性能 smoke | TB 链路与热路径 |
 
-hello_printf 使用 rv64gc（含压缩指令和浮点），静态链接
-glibc，是验证完整用户态模拟器的端到端测试。
+这些程序统一使用 `-static -march=rv64gc -mabi=lp64d -O2`，
+用于验证完整 linux-user 执行路径。
 
 ### 8.3 构建与运行
 
@@ -648,24 +663,24 @@ apt install gcc-riscv64-linux-gnu
 # 构建全部客户程序
 cd tests/guest && make
 
-# 输出到 build/riscv64/
-ls build/riscv64/
-# hello  hello_printf
+# 输出到 target/guest/riscv64/
+ls ../../target/guest/riscv64/
+# hello  hello_printf  hello_float  argv_echo  dhrystone
 ```
 
 **使用 QEMU 验证**：
 
 ```bash
 apt install qemu-user
-qemu-riscv64 build/riscv64/hello
-qemu-riscv64 build/riscv64/hello_printf
+qemu-riscv64 target/guest/riscv64/hello
+qemu-riscv64 target/guest/riscv64/hello_printf
 ```
 
 **使用 tcg-rs 运行**：
 
 ```bash
 cargo run --release --bin tcg-riscv64 -- \
-    tests/guest/build/riscv64/hello
+    target/guest/riscv64/hello
 ```
 
 **自动化集成测试**（`tests/src/linux_user/mod.rs`）：

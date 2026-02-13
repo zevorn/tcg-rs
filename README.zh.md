@@ -5,7 +5,7 @@
 
 [QEMU](https://www.qemu.org/) **TCG**（Tiny Code Generator）的 Rust 重新实现——一个动态二进制翻译引擎，在运行时将客户架构指令转换为宿主机器码。
 
-> **状态**：完整的翻译流水线已端到端可工作——RISC-V 客户指令通过 decodetree 生成的解码器解码，翻译为 TCG IR，经活跃性分析优化，寄存器分配后编译为 x86-64 机器码并执行。差分测试框架可对比 QEMU 验证正确性。
+> **状态**：完整的翻译流水线已端到端可工作——RISC-V 客户指令通过 decodetree 生成的解码器解码，翻译为 TCG IR，经活跃性分析优化，寄存器分配后编译为 x86-64 机器码并执行。MTTCG 执行、直接 TB 链路和 linux-user ELF 加载与 syscall 仿真均已可用。差分测试框架可对比 QEMU 验证正确性。
 
 ## 概述
 
@@ -26,11 +26,12 @@ tcg-rs 旨在提供一个干净、安全、模块化的 QEMU TCG 子系统 Rust 
 |-------|------|------|
 | `tcg-core` | 已实现 | IR 定义（opcodes、types、temps、ops、context、labels、TBs）+ IR 构建器（`gen_*` 方法） |
 | `tcg-backend` | 已实现 | 活跃性分析、约束系统、寄存器分配器、x86-64 代码生成、翻译流水线 |
+| `tcg-exec` | 已实现 | 支持 MTTCG 的执行循环、TB 存储、直接链路、每 vCPU 跳转缓存、执行统计 |
+| `tcg-linux-user` | 已实现 | ELF 加载、guest 地址空间、Linux syscall 仿真、`tcg-riscv64` 运行器 |
 | `decodetree` | 已实现 | QEMU 风格 `.decode` 文件解析器和 Rust 代码生成器，用于生成指令解码器 |
-| `tcg-frontend` | 已实现 | 客户指令解码框架 + RISC-V RV64I+M 前端（65 条指令） |
-| `tcg-tests` | 已实现 | 704 个测试：单元测试、后端回归测试、前端翻译测试、差分测试（对比 QEMU）、端到端集成测试 |
+| `tcg-frontend` | 已实现 | 客户指令解码框架 + RISC-V RV64IMAFDC 前端（184 条指令） |
+| `tcg-tests` | 已实现 | 816 个测试：单元、后端回归、前端翻译、difftest、MTTCG、linux-user 端到端 |
 | `tcg-opt` | 计划中 | IR 优化器：常量/拷贝传播、DCE |
-| `tcg-exec` | 计划中 | CPU 执行循环、TB 缓存、TB 链接/失效 |
 | `tcg-mmu` | 计划中 | 软件 TLB、客户内存访问 |
 | `tcg-runtime` | 计划中 | 生成代码调用的运行时辅助函数 |
 
@@ -46,7 +47,7 @@ tcg-rs 旨在提供一个干净、安全、模块化的 QEMU TCG 子系统 Rust 
 
 ```bash
 cargo build                  # 构建所有 crate
-cargo test                   # 运行全部 704 个测试
+cargo test                   # 运行全部 816 个测试
 cargo clippy -- -D warnings  # Lint 检查
 cargo fmt --check            # 格式检查
 ```
@@ -77,13 +78,32 @@ cargo fmt --check            # 格式检查
   - System V ABI prologue/epilogue，`TCG_AREG0 = RBP`
   - `exit_tb`、`goto_tb`（4 字节对齐用于原子修补）、`goto_ptr`
 
+### tcg-exec
+
+- **MTTCG 状态拆分**：`SharedState`（TB store + code buffer + backend）与
+  `PerCpuState`（jump cache + stats），隔离多线程共享与热路径私有数据。
+- **线程安全 TB 存储**：读路径无锁、hash 修改加锁、每 TB 链路状态独立锁。
+- **执行热路径**：jump-cache 命中 → hash 命中 → translate，配合
+  `next_tb_hint`、`goto_tb` 链路 patch、`exit_target` 缓存。
+- **可观测性**：`ExecStats` 提供命中率、链路 patch 次数、hint 命中统计。
+
+### tcg-linux-user
+
+- **ELF 加载与栈布局**：支持 guest argv 透传和基础 auxv 布局。
+- **guest 地址空间管理**：覆盖 mmap/brk 等用户态执行所需内存管理路径。
+- **syscall 仿真**：提供 linux-user 基础系统调用处理。
+- **运行器**：`tcg-riscv64 <elf> [args...]`，用于端到端 guest 运行测试。
+
 ### tcg-tests
 
 - **单元测试**：核心数据结构 API（types、opcodes、temps、labels、ops、context、TBs）
 - **后端回归测试**：x86-64 指令编码、codegen 别名行为
-- **前端翻译测试**：58 个 RISC-V 指令测试，覆盖完整的 decode→IR→codegen→execute 流水线
+- **前端翻译测试**：91 个 RISC-V 指令测试，覆盖完整的 decode→IR→codegen→execute 流水线（RV32I/RV64I/RVC/RV32F/RV64F）
 - **差分测试**：对比 tcg-rs 与 QEMU（qemu-riscv64 用户态）的指令模拟结果，使用边界值验证
 - **集成测试**：使用最小 RISC-V CPU 状态的端到端流水线——ALU 运算、分支、循环、内存访问、复杂多操作序列
+- **MTTCG 并发测试**：`tests/src/exec/mttcg.rs` 覆盖并发查找/翻译/链路场景（26 个测试）
+- **linux-user guest 测试**：`hello`、`hello_printf`、`hello_float`、
+  `dhrystone`、`argv_echo`
 
 ### decodetree
 
@@ -95,11 +115,10 @@ cargo fmt --check            # 格式检查
 
 - **翻译框架**（`lib.rs`）：`TranslatorOps` trait 和 `translator_loop()`——架构无关的指令翻译循环
 - **RISC-V 前端**（`riscv/`）：
-  - `cpu.rs`：`RiscvCpu` 状态（`#[repr(C)]`，32 个 GPR + PC）
-  - `mod.rs`：`RiscvDisasContext`，GPR 作为 TCG 全局变量，`RiscvTranslator` 实现 `TranslatorOps`
-  - `trans.rs`：65 个 `trans_*` 方法实现 `Decode<Context>` trait，使用 QEMU 风格的 `gen_xxx` 辅助函数模式和 `BinOp` 函数指针
-  - 已实现：lui、auipc、jal、jalr、分支（beq/bne/blt/bge/bltu/bgeu）、ALU 立即数、移位、R-type ALU、RV64I W-suffix 指令、fence、ecall、ebreak
-  - 桩函数：load/store（需要客户内存访问机制）、M 扩展（需要 mul/div IR 操作）
+  - `cpu.rs`：`RiscvCpu` 状态（`#[repr(C)]`，32 个 GPR + 32 个 FPR + PC + 浮点 CSR）
+  - `mod.rs`：`RiscvDisasContext`，GPR/FPR 作为 TCG 全局变量，`RiscvTranslator` 实现 `TranslatorOps`
+  - `trans.rs`：184 个 `trans_*` 方法实现 `Decode<Context>` trait，使用 QEMU 风格的 `gen_xxx` 辅助函数模式和 `BinOp` 函数指针
+  - 已实现：RV64I（完整）、RV64M（mul/div/rem）、RV64F/RV64D（浮点算术、load/store、类型转换、比较、FMA）、RVC（压缩指令）、load/store（通过 helper 调用访问客户内存）、用户态 CSR（fflags/frm/fcsr）
 
 ## QEMU 参考
 
@@ -114,11 +133,15 @@ cargo fmt --check            # 格式检查
 - `target/riscv/translate.c` — RISC-V 前端翻译
 - `target/riscv/insn_trans/trans_rvi.c.inc` — RV64I 指令翻译辅助函数
 - `accel/tcg/translator.c` — `translator_loop`（架构无关的翻译循环）
+- `accel/tcg/cpu-exec.c` — 执行循环、TB 链路与退出协议
+- `accel/tcg/tb-maint.c` — TB 失效与解链
 - `docs/devel/decodetree.rst` — Decodetree 基于模式的指令解码器生成器
+- `docs/devel/multi-thread-tcg.rst` — MTTCG 并发模型
 
 ## 文档
 
-- [设计文档](docs/design.md) — 架构、数据结构、约束系统、翻译流水线
+- [设计文档](docs/design.md) — 架构、数据结构、翻译流水线、执行层、linux-user
+- [IR Ops](docs/ir-ops.md) — Opcode 目录、Op 结构、IR Builder API
 - [x86-64 后端](docs/x86_64-backend.md) — 指令编码器、约束表、codegen 分派
 - [测试体系](docs/testing.md) — 测试架构、运行方式、差分测试、客户程序
 - [代码风格](docs/coding-style.md) — 命名规范、格式规则
