@@ -5,7 +5,7 @@
 
 [QEMU](https://www.qemu.org/) **TCG**（Tiny Code Generator）的 Rust 重新实现——一个动态二进制翻译引擎，在运行时将客户架构指令转换为宿主机器码。
 
-> **状态**：完整的翻译流水线已端到端可工作——RISC-V 客户指令通过 decodetree 生成的解码器解码，翻译为 TCG IR，经 IR 优化（常量折叠、拷贝传播、代数简化）和活跃性分析，寄存器分配后编译为 x86-64 机器码并执行。MTTCG 执行、直接 TB 链路和 linux-user ELF 加载与 syscall 仿真均已可用。差分测试框架可对比 QEMU 验证正确性。
+> **状态**：完整的翻译流水线已端到端可工作——RISC-V 客户指令通过 decode 生成的解码器解码，翻译为 TCG IR，经 IR 优化（常量折叠、拷贝传播、代数简化）和活跃性分析，寄存器分配后编译为 x86-64 机器码并执行。MTTCG 执行、直接 TB 链路和 linux-user ELF 加载与 syscall 仿真均已可用。差分测试框架可对比 QEMU 验证正确性。
 
 ## 概述
 
@@ -14,7 +14,7 @@ tcg-rs 旨在提供一个干净、安全、模块化的 QEMU TCG 子系统 Rust 
 ```
 ┌──────────────┐    ┌───────────────┐    ┌──────────────┐    ┌───────────┐    ┌──────────┐    ┌──────────────────┐    ┌─────────┐
 │ Guest Binary │───→│ Frontend      │───→│ IR Builder   │───→│ Optimizer │───→│ Liveness │───→│ RegAlloc+Codegen │───→│ Execute │
-│ (RISC-V)     │    │ (decodetree   │    │ (gen_*)      │    │           │    │ Analysis │    │ (x86-64)         │    │ (JIT)   │
+│ (RISC-V)     │    │ (decode       │    │ (gen_*)      │    │           │    │ Analysis │    │ (x86-64)         │    │ (JIT)   │
 └──────────────┘    │  + trans_*)   │    └──────────────┘    └───────────┘    └──────────┘    └──────────────────┘    └─────────┘
                     └───────────────┘
                      tcg-frontend         tcg-core             tcg-backend     tcg-backend     tcg-backend             tcg-backend
@@ -28,7 +28,7 @@ tcg-rs 旨在提供一个干净、安全、模块化的 QEMU TCG 子系统 Rust 
 | `tcg-backend` | 已实现 | IR 优化器、活跃性分析、约束系统、寄存器分配器、x86-64 代码生成、翻译流水线 |
 | `tcg-exec` | 已实现 | 支持 MTTCG 的执行循环、TB 存储、直接链路、每 vCPU 跳转缓存、执行统计 |
 | `tcg-linux-user` | 已实现 | ELF 加载、guest 地址空间、Linux syscall 仿真、`tcg-riscv64` 运行器 |
-| `decodetree` | 已实现 | QEMU 风格 `.decode` 文件解析器和 Rust 代码生成器，用于生成指令解码器 |
+| `decode` | 已实现 | QEMU 风格 `.decode` 文件解析器和 Rust 代码生成器，用于生成指令解码器 |
 | `tcg-frontend` | 已实现 | 客户指令解码框架 + RISC-V RV64IMAFDC 前端（184 条指令） |
 | `tcg-tests` | 已实现 | 816 个测试：单元、后端回归、前端翻译、difftest、MTTCG、linux-user 端到端 |
 
@@ -103,11 +103,11 @@ cargo fmt --check            # 格式检查
 - **linux-user guest 测试**：`hello`、`hello_printf`、`hello_float`、
   `dhrystone`、`argv_echo`
 
-### decodetree
+### decode
 
 - **解析器**：解析 QEMU 风格的 `.decode` 文件（字段、参数集、格式、位级匹配模式）
 - **代码生成器**：生成 Rust 代码——`Args*` 结构体、`extract_*` 函数、`Decode<Ir>` trait 及 `trans_*` 方法、`decode()` 分派函数
-- **构建集成**：`frontend/build.rs` 在编译时调用 decodetree 生成 RISC-V 指令解码器
+- **构建集成**：`frontend/build.rs` 在编译时调用 decode 生成 RISC-V 指令解码器
 
 ### tcg-frontend
 
@@ -133,7 +133,7 @@ cargo fmt --check            # 格式检查
 - `accel/tcg/translator.c` — `translator_loop`（架构无关的翻译循环）
 - `accel/tcg/cpu-exec.c` — 执行循环、TB 链路与退出协议
 - `accel/tcg/tb-maint.c` — TB 失效与解链
-- `docs/devel/decodetree.rst` — Decodetree 基于模式的指令解码器生成器
+- `docs/devel/decodetree.rst` — Decodetree 基于模式的指令解码器生成器（QEMU 参考）
 - `docs/devel/multi-thread-tcg.rst` — MTTCG 并发模型
 
 ## 文档

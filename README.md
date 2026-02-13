@@ -5,7 +5,7 @@
 
 A Rust reimplementation of [QEMU](https://www.qemu.org/)'s **TCG** (Tiny Code Generator) — the dynamic binary translation engine that converts guest architecture instructions into host machine code at runtime.
 
-> **Status**: The complete translation pipeline is working end-to-end — RISC-V guest instructions are decoded via a decodetree-generated decoder, translated to TCG IR, optimized (constant folding, copy propagation, algebraic simplification), register-allocated, compiled to x86-64 machine code, and executed. MTTCG execution, direct TB chaining, and linux-user ELF loading with syscall emulation are operational. A differential testing framework validates correctness against QEMU.
+> **Status**: The complete translation pipeline is working end-to-end — RISC-V guest instructions are decoded via a decode-generated decoder, translated to TCG IR, optimized (constant folding, copy propagation, algebraic simplification), register-allocated, compiled to x86-64 machine code, and executed. MTTCG execution, direct TB chaining, and linux-user ELF loading with syscall emulation are operational. A differential testing framework validates correctness against QEMU.
 
 ## Overview
 
@@ -14,7 +14,7 @@ tcg-rs aims to provide a clean, safe, and modular Rust implementation of QEMU's 
 ```
 ┌──────────────┐    ┌───────────────┐    ┌──────────────┐    ┌───────────┐    ┌──────────┐    ┌──────────────────┐    ┌─────────┐
 │ Guest Binary │───→│ Frontend      │───→│ IR Builder   │───→│ Optimizer │───→│ Liveness │───→│ RegAlloc+Codegen │───→│ Execute │
-│ (RISC-V)     │    │ (decodetree   │    │ (gen_*)      │    │           │    │ Analysis │    │ (x86-64)         │    │ (JIT)   │
+│ (RISC-V)     │    │ (decode       │    │ (gen_*)      │    │           │    │ Analysis │    │ (x86-64)         │    │ (JIT)   │
 └──────────────┘    │  + trans_*)   │    └──────────────┘    └───────────┘    └──────────┘    └──────────────────┘    └─────────┘
                     └───────────────┘
                      tcg-frontend         tcg-core             tcg-backend     tcg-backend     tcg-backend             tcg-backend
@@ -28,7 +28,7 @@ tcg-rs aims to provide a clean, safe, and modular Rust implementation of QEMU's 
 | `tcg-backend` | Implemented | IR optimizer, liveness analysis, constraint system, register allocator, x86-64 codegen, translation pipeline |
 | `tcg-exec` | Implemented | MTTCG-capable execution loop, TB store, direct chaining, per-vCPU jump cache, execution stats |
 | `tcg-linux-user` | Implemented | ELF loader, guest address space, Linux syscall emulation, `tcg-riscv64` runner |
-| `decodetree` | Implemented | QEMU-style `.decode` file parser and Rust code generator for instruction decoders |
+| `decode` | Implemented | QEMU-style `.decode` file parser and Rust code generator for instruction decoders |
 | `tcg-frontend` | Implemented | Guest instruction decoding framework + RISC-V RV64IMAFDC frontend (184 instructions) |
 | `tcg-tests` | Implemented | 816 tests: unit, backend regression, frontend translation, difftest (vs QEMU), MTTCG, and linux-user e2e |
 
@@ -107,11 +107,11 @@ cargo fmt --check            # Format check
 - **linux-user guest tests**: `hello`, `hello_printf`, `hello_float`,
   `dhrystone`, `argv_echo`
 
-### decodetree
+### decode
 
 - **Parser**: Parses QEMU-style `.decode` files (fields, argument sets, formats, patterns with bit-level matching)
 - **Code generator**: Emits Rust code — `Args*` structs, `extract_*` functions, `Decode<Ir>` trait with `trans_*` methods, and `decode()` dispatch function
-- **Build integration**: `frontend/build.rs` invokes decodetree at compile time to generate the RISC-V instruction decoder
+- **Build integration**: `frontend/build.rs` invokes decode at compile time to generate the RISC-V instruction decoder
 
 ### tcg-frontend
 
@@ -137,7 +137,7 @@ This project references the following QEMU source files:
 - `accel/tcg/translator.c` — `translator_loop` (architecture-independent translation loop)
 - `accel/tcg/cpu-exec.c` — execution loop, TB chaining, exit protocol
 - `accel/tcg/tb-maint.c` — TB invalidation and unlinking
-- `docs/devel/decodetree.rst` — Decodetree pattern-based instruction decoder generator
+- `docs/devel/decodetree.rst` — Decodetree pattern-based instruction decoder generator (QEMU reference)
 - `docs/devel/multi-thread-tcg.rst` — MTTCG concurrency model
 
 ## Documentation

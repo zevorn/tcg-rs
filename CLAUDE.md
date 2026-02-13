@@ -46,7 +46,7 @@ Signed-off-by: Name <email>
 **Subject 行规则**：
 
 - 格式为 `module: subject`，其中 `module` 是受影响的主要模块名
-- 常用 module 名：`core`、`backend`、`frontend`、`decodetree`、`exec`、`linux-user`、`tests`、`docs`、`project`（跨模块变更）
+- 常用 module 名：`core`、`backend`、`frontend`、`decode`、`exec`、`linux-user`、`tests`、`docs`、`project`（跨模块变更）
 - subject 使用小写开头，祈使语气（如 `add`、`fix`、`remove`），不加句号
 - 总长度不超过 72 字符
 
@@ -86,7 +86,7 @@ Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen
 | `tcg-frontend` | 客户指令解码框架与 RISC-V 翻译器 | `target/riscv/translate.c`、`accel/tcg/translator.c` |
 | `tcg-exec` | MTTCG 执行循环、TB 缓存（jump cache + hash）、TB 链路/失效 | `accel/tcg/cpu-exec.c`、`accel/tcg/translate-all.c`、`accel/tcg/tb-maint.c` |
 | `tcg-linux-user` | 用户态 ELF 加载、地址空间与 syscall 仿真 | `linux-user/main.c`、`linux-user/elfload.c`、`linux-user/syscall.c` |
-| `decodetree` | QEMU 风格 `.decode` 解析器与 Rust 解码器生成器 | `scripts/decodetree.py`、`docs/devel/decodetree.rst` |
+| `decode` | QEMU 风格 `.decode` 解析器与 Rust 解码器生成器 | `scripts/decodetree.py`、`docs/devel/decodetree.rst` |
 | `tests` | 分层测试（单元、集成、difftest、MTTCG、linux-user） | `tests/tcg/` + `linux-user/tests/` 设计思路 |
 
 ### 核心数据结构（C → Rust 映射）

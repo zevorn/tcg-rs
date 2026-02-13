@@ -3,7 +3,7 @@ mod backend;
 #[cfg(test)]
 mod core;
 #[cfg(test)]
-mod decodetree;
+mod decode;
 #[cfg(test)]
 mod exec;
 #[cfg(test)]

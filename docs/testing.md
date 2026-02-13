@@ -23,7 +23,7 @@ tcg-rs 采用分层测试策略，从底层数据结构到完整的用户态模�
             │ (105 tests)  │  → codegen → 执行
        ┌────┴──────────────┴────┐
        │       单元测试          │  core(192) + backend(256)
-       │      (567 tests)       │  + decodetree(93) + exec(26)
+       │      (567 tests)       │  + decode(93) + exec(26)
        └────────────────────────┘
 ```
 
@@ -48,7 +48,7 @@ cargo test -p tcg-exec          # 执行循环
 # 按模块过滤
 cargo test -p tcg-tests core::           # 仅 core 模块
 cargo test -p tcg-tests backend::        # 仅 backend 模块
-cargo test -p tcg-tests decodetree::     # 仅 decodetree 模块
+cargo test -p tcg-tests decode::     # 仅 decode 模块
 cargo test -p tcg-tests frontend::       # 仅前端指令测试
 cargo test -p tcg-tests integration::    # 仅集成测试
 cargo test -p tcg-tests difftest         # 仅差分测试
@@ -120,7 +120,7 @@ TIMEFORMAT=%R; time qemu-riscv64 target/guest/riscv64/dhrystone
 ```
 tests/
 ├── Cargo.toml                    # 依赖：core, backend, frontend,
-│                                 #        exec, decodetree
+│                                 #        exec, decode
 ├── src/
 │   ├── lib.rs                    # 模块声明
 │   ├── core/                     # 核心 IR 单元测试 (192)
@@ -136,7 +136,7 @@ tests/
 │   │   ├── code_buffer.rs
 │   │   ├── x86_64.rs
 │   │   └── mod.rs
-│   ├── decodetree/               # 解码器生成器测试 (93)
+│   ├── decode/                  # 解码器生成器测试 (93)
 │   │   └── mod.rs
 │   ├── frontend/                 # 前端指令测试 (109 + 35)
 │   │   ├── mod.rs                #   RV32I/RV64I/RVC 执行
@@ -162,7 +162,7 @@ tests/
 | backend | 256 | 31.4% | x86-64 指令编码、代码缓冲区 |
 | core | 192 | 23.5% | IR 类型、Opcode、Temp、Label、Op、Context |
 | integration | 105 | 12.9% | IR → codegen → 执行全流水线 |
-| decodetree | 93 | 11.4% | .decode 解析、代码生成、字段提取 |
+| decode | 93 | 11.4% | .decode 解析、代码生成、字段提取 |
 | frontend | 91 | 11.2% | RISC-V 指令执行（含 RVC、RV32F） |
 | difftest | 35 | 4.3% | tcg-rs vs QEMU 差分对比 |
 | exec | 26 | 3.2% | TB 缓存、执行循环、MTTCG 并发 |
@@ -226,7 +226,7 @@ cargo test -p tcg-tests backend::
 | 代码质量 | 2 | 无 u32 泄漏、trait 方法无重复 |
 
 ```bash
-cargo test -p tcg-tests decodetree::
+cargo test -p tcg-tests decode::
 ```
 
 ---
@@ -467,8 +467,8 @@ fn run_tcgrs(
 ) -> RiscvCpu
 ```
 
-流水线：`RISC-V 机器码 → decodetree 解码 → trans_* → TCG IR
-→ liveness → regalloc → x86-64 codegen → 执行`
+流水线：`RISC-V 机器码 → decode 解码 → trans_* → TCG IR
+→ optimize → liveness → regalloc → x86-64 codegen → 执行`
 
 分支指令会退出翻译块（TB），通过 PC 值判断 taken/not-taken：
 - `PC = offset` → taken

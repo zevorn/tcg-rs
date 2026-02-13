@@ -8,4 +8,4 @@ tcg-core = { path = "../core" }
 libc = "0.2"
 
 [build-dependencies]
-decodetree = { path = "../decodetree" }
+decode = { path = "../decode" }

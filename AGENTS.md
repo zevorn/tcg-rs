@@ -3,7 +3,7 @@
 ## 项目结构与模块组织
 - core/: IR 类型、操作码、临时变量、标签与 IR builder（gen_*）。
 - backend/: 活跃分析、约束系统、寄存器分配与 x86-64 代码生成。
-- decodetree/: QEMU 风格 .decode 文件解析器与 Rust 代码生成器。
+- decode/: QEMU 风格 .decode 文件解析器与 Rust 代码生成器。
 - frontend/: 客户指令解码框架与 RISC-V RV64IMAFDC 前端。
 - exec/: MTTCG 执行循环、TB 缓存/链路、SharedState/PerCpuState。
 - linux-user/: ELF 加载、guest 地址空间、syscall 仿真、tcg-riscv64 运行器。

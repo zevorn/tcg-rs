@@ -3,7 +3,7 @@ members = [
     "core",
     "backend",
     "frontend",
-    "decodetree",
+    "decode",
     "exec",
     "linux-user",
     "tests",

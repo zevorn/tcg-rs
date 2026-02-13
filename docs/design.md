@@ -18,14 +18,14 @@ Guest Binary → Frontend (decode) → TCG IR → Optimizer → Backend (codegen
 tcg-rs/
 ├── core/           # IR 定义层：纯数据结构，零依赖
 ├── backend/        # 代码生成层：依赖 tcg-core + libc
-├── decodetree/     # 解码器生成器：解析 .decode 文件，生成 Rust 解码器
-├── frontend/       # 客户指令解码层：依赖 tcg-core + decodetree（构建时）
+├── decode/         # 解码器生成器：解析 .decode 文件，生成 Rust 解码器
+├── frontend/       # 客户指令解码层：依赖 tcg-core + decode（构建时）
 ├── exec/           # 执行层：MTTCG 执行循环、TB 缓存、链路管理
 ├── linux-user/     # 用户态运行层：ELF 加载、syscall、guest 空间
 └── tests/          # 测试层：单元、集成、difftest、MTTCG、linux-user
 ```
 
-**设计意图**：遵循 QEMU 的 `include/tcg/` (定义) 与 `tcg/` (实现) 分离原则。`tcg-core` 是纯粹的数据定义，不包含任何平台相关代码或 `unsafe`，`tcg-frontend` 和 `tcg-backend`（含优化器）都只需依赖 `tcg-core`。`decodetree` 是独立的构建时工具 crate，解析 QEMU 风格的 `.decode` 文件并生成 Rust 解码器代码。测试独立成 crate 是为了保持源码文件干净，且外部 crate 测试能验证公共 API 的完整性。
+**设计意图**：遵循 QEMU 的 `include/tcg/` (定义) 与 `tcg/` (实现) 分离原则。`tcg-core` 是纯粹的数据定义，不包含任何平台相关代码或 `unsafe`，`tcg-frontend` 和 `tcg-backend`（含优化器）都只需依赖 `tcg-core`。`decode` 是独立的构建时工具 crate，解析 QEMU 风格的 `.decode` 文件并生成 Rust 解码器代码。测试独立成 crate 是为了保持源码文件干净，且外部 crate 测试能验证公共 API 的完整性。
 
 ### 2.1 MTTCG 支持与执行流程对齐
 
@@ -656,9 +656,9 @@ loop {
 
 ## 7. tcg-frontend 客户解码层
 
-### 7.1 decodetree 解码器生成器
+### 7.1 decode 解码器生成器
 
-`decodetree` crate 实现了 QEMU 的 decodetree 工具的 Rust 版本，解析 `.decode` 文件并生成 Rust 解码器代码。
+`decode` crate 实现了 QEMU 的 decodetree 工具的 Rust 版本，解析 `.decode` 文件并生成 Rust 解码器代码。
 
 **输入**：`frontend/src/riscv/insn32.decode`（RV64IMAFDC 指令模式）
 
@@ -668,7 +668,7 @@ loop {
 - `Decode<Ir>` trait：每个模式对应一个 `trans_*` 方法
 - `decode()` 函数：if-else 链按 fixedmask/fixedbits 匹配指令
 
-**构建集成**：`frontend/build.rs` 在编译时调用 `decodetree::generate()`，输出到 `$OUT_DIR/riscv32_decode.rs`，通过 `include!` 宏引入。
+**构建集成**：`frontend/build.rs` 在编译时调用 `decode::generate()`，输出到 `$OUT_DIR/riscv32_decode.rs`，通过 `include!` 宏引入。
 
 ### 7.2 TranslatorOps trait
 
@@ -837,7 +837,7 @@ struct GuestSpace {
 | `tcg_gen_code`                | `translate()`                  | `backend/src/translate.rs`      |
 | `translator_loop`             | `translator_loop()`            | `frontend/src/lib.rs`           |
 | `DisasContextBase`            | `DisasContextBase`             | `frontend/src/lib.rs`           |
-| `disas_log` (decodetree)      | `decodetree::generate()`       | `decodetree/src/lib.rs`         |
+| `disas_log` (decodetree)      | `decode::generate()`           | `decode/src/lib.rs`             |
 | `target/riscv/translate.c`    | `RiscvDisasContext`            | `frontend/src/riscv/mod.rs`     |
 | `trans_rvi.c.inc` (gen_xxx)   | `gen_arith/gen_branch/...`     | `frontend/src/riscv/trans.rs`   |
 | `cpu_exec`                    | `cpu_exec_loop_mt()`           | `exec/src/exec_loop.rs`        |
