@@ -1,6 +1,7 @@
 pub mod code_buffer;
 pub mod constraint;
 pub mod liveness;
+pub mod optimize;
 pub mod regalloc;
 pub mod translate;
 pub mod x86_64;
