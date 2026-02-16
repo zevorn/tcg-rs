@@ -12,6 +12,7 @@ use std::process;
 
 use tcg_core::context::Context;
 use tcg_core::dump::dump_ops_with;
+use tcg_core::serialize;
 use tcg_core::TempIdx;
 use tcg_frontend::riscv::cpu::NUM_GPRS;
 use tcg_frontend::riscv::ext::RiscvCfg;
@@ -51,33 +52,38 @@ struct Args {
     elf_path: String,
     arch: Option<String>,
     output: Option<String>,
+    emit_bin: Option<String>,
     start: Option<u64>,
     count: Option<usize>,
     max_insns: u32,
 }
 
+const USAGE: &str = "\
+usage: tcg-irdump <elf> [options]
+
+Options:
+  --arch <name>      Guest architecture (default: auto)
+  -o <file>          Output to file
+  --emit-bin <file>  Emit binary .tcgir file
+  --start <hex>      Start address
+  --count <n>        Max TBs to translate
+  --max-insns <n>    Max insns per TB (default: 512)
+  -h, --help         Show this help
+
+Supported architectures: riscv64";
+
 fn parse_args() -> Args {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!(
-            "usage: tcg-irdump <elf> [options]\n\
-             \n\
-             Options:\n  \
-               --arch <name>   Guest architecture (default: auto)\n  \
-               -o <file>       Output to file\n  \
-               --start <hex>   Start address\n  \
-               --count <n>     Max TBs to translate\n  \
-               --max-insns <n> Max insns per TB (default: 512)\n\
-             \n\
-             Supported architectures: riscv64"
-        );
-        process::exit(1);
+    if args.len() < 2 || args[1] == "--help" || args[1] == "-h" {
+        eprintln!("{USAGE}");
+        process::exit(if args.len() < 2 { 1 } else { 0 });
     }
 
     let mut a = Args {
         elf_path: args[1].clone(),
         arch: None,
         output: None,
+        emit_bin: None,
         start: None,
         count: None,
         max_insns: 512,
@@ -93,6 +99,10 @@ fn parse_args() -> Args {
             "-o" => {
                 i += 1;
                 a.output = Some(args[i].clone());
+            }
+            "--emit-bin" => {
+                i += 1;
+                a.emit_bin = Some(args[i].clone());
             }
             "--start" => {
                 i += 1;
@@ -287,6 +297,10 @@ fn main() {
     let mut pc = start_pc;
     let mut tb_count = 0usize;
 
+    // Binary output: collect contexts, write at end.
+    let mut bin_contexts: Vec<Context> = Vec::new();
+    let emit_bin = args.emit_bin.is_some();
+
     while pc >= base_addr && pc < image_end && tb_count < max_count {
         writeln!(out, "TB #{tb_count} @ 0x{pc:x}").expect("write failed");
         let (next_pc, _) = translate_tb(
@@ -298,7 +312,33 @@ fn main() {
             &mut out,
         );
         writeln!(out).expect("write failed");
+
+        if emit_bin {
+            // Snapshot current context for serialization.
+            // Re-create from raw parts to capture this TB.
+            let ctx_snap = Context::from_raw_parts(
+                ir.temps().to_vec(),
+                ir.ops().to_vec(),
+                ir.labels().to_vec(),
+                ir.nb_globals(),
+            );
+            bin_contexts.push(ctx_snap);
+        }
+
         tb_count += 1;
         pc = next_pc;
+    }
+
+    if let Some(ref path) = args.emit_bin {
+        let f = fs::File::create(path).unwrap_or_else(|e| {
+            eprintln!("cannot create {path}: {e}");
+            process::exit(1);
+        });
+        let mut bw = BufWriter::new(f);
+        for ctx in &bin_contexts {
+            serialize::serialize(ctx, &mut bw).expect("serialize failed");
+        }
+        bw.flush().expect("flush failed");
+        eprintln!("wrote {} TB(s) to {path}", bin_contexts.len());
     }
 }
