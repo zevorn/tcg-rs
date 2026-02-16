@@ -4,6 +4,7 @@ pub mod ir_builder;
 pub mod label;
 pub mod op;
 pub mod opcode;
+pub mod serialize;
 pub mod tb;
 pub mod temp;
 pub mod types;

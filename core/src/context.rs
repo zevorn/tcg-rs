@@ -274,6 +274,29 @@ impl Context {
         t.mem_offset = offset;
         offset
     }
+
+    /// Construct a Context from pre-built parts (deserialization).
+    pub fn from_raw_parts(
+        temps: Vec<Temp>,
+        ops: Vec<Op>,
+        labels: Vec<Label>,
+        nb_globals: u32,
+    ) -> Self {
+        Self {
+            temps,
+            ops,
+            labels,
+            nb_globals,
+            frame_reg: None,
+            frame_start: 0,
+            frame_end: 0,
+            frame_alloc_end: 0,
+            reserved_regs: RegSet::EMPTY,
+            const_table: Default::default(),
+            gen_insn_end_off: Vec::new(),
+            tb_idx: 0,
+        }
+    }
 }
 
 impl Default for Context {
