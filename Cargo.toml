@@ -9,5 +9,6 @@ members = [
     "linux-user",
     "tests",
     "tools/irdump",
+    "tools/irbackend",
 ]
 resolver = "2"

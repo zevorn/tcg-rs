@@ -1,0 +1,12 @@
+[package]
+name = "tcg-irbackend"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "tcg-irbackend"
+path = "src/main.rs"
+
+[dependencies]
+tcg-core = { path = "../../core" }
+tcg-backend = { path = "../../backend" }
