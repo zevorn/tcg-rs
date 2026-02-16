@@ -4,7 +4,6 @@ use std::mem;
 
 const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
 const ELFCLASS64: u8 = 2;
-const EM_RISCV: u16 = 243;
 const PT_LOAD: u32 = 1;
 const PF_X: u32 = 1;
 
@@ -50,6 +49,7 @@ pub struct Segment {
 /// Parsed ELF information.
 pub struct ElfInfo {
     pub entry: u64,
+    pub e_machine: u16,
     pub segments: Vec<Segment>,
 }
 
@@ -66,9 +66,6 @@ pub fn parse(data: &[u8]) -> Result<ElfInfo, String> {
     }
     if ehdr.e_ident[4] != ELFCLASS64 {
         return Err("not a 64-bit ELF".into());
-    }
-    if ehdr.e_machine != EM_RISCV {
-        return Err(format!("unsupported machine type: {}", ehdr.e_machine));
     }
 
     let ph_off = ehdr.e_phoff as usize;
@@ -104,6 +101,7 @@ pub fn parse(data: &[u8]) -> Result<ElfInfo, String> {
 
     Ok(ElfInfo {
         entry: ehdr.e_entry,
+        e_machine: ehdr.e_machine,
         segments,
     })
 }

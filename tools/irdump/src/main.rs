@@ -1,6 +1,6 @@
 //! tcg-irdump — static ELF → IR dump tool.
 //!
-//! Reads a RISC-V ELF binary, translates it TB-by-TB into TCG IR,
+//! Reads a guest ELF binary, translates it TB-by-TB into TCG IR,
 //! and prints the IR in a human-readable format.
 
 mod elf;
@@ -18,8 +18,38 @@ use tcg_frontend::riscv::ext::RiscvCfg;
 use tcg_frontend::riscv::{RiscvDisasContext, RiscvTranslator};
 use tcg_frontend::{translator_loop, DisasJumpType, TranslatorOps};
 
+const EM_RISCV: u16 = 243;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Arch {
+    Riscv64,
+}
+
+impl Arch {
+    fn from_name(s: &str) -> Option<Arch> {
+        match s {
+            "riscv64" => Some(Arch::Riscv64),
+            _ => None,
+        }
+    }
+
+    fn from_e_machine(em: u16) -> Option<Arch> {
+        match em {
+            EM_RISCV => Some(Arch::Riscv64),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Arch::Riscv64 => "riscv64",
+        }
+    }
+}
+
 struct Args {
     elf_path: String,
+    arch: Option<String>,
     output: Option<String>,
     start: Option<u64>,
     count: Option<usize>,
@@ -33,16 +63,20 @@ fn parse_args() -> Args {
             "usage: tcg-irdump <elf> [options]\n\
              \n\
              Options:\n  \
+               --arch <name>   Guest architecture (default: auto)\n  \
                -o <file>       Output to file\n  \
                --start <hex>   Start address\n  \
                --count <n>     Max TBs to translate\n  \
-               --max-insns <n> Max insns per TB (default: 512)"
+               --max-insns <n> Max insns per TB (default: 512)\n\
+             \n\
+             Supported architectures: riscv64"
         );
         process::exit(1);
     }
 
     let mut a = Args {
         elf_path: args[1].clone(),
+        arch: None,
         output: None,
         start: None,
         count: None,
@@ -52,6 +86,10 @@ fn parse_args() -> Args {
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
+            "--arch" => {
+                i += 1;
+                a.arch = Some(args[i].clone());
+            }
             "-o" => {
                 i += 1;
                 a.output = Some(args[i].clone());
@@ -108,11 +146,7 @@ fn build_image(info: &elf::ElfInfo) -> (u64, Vec<u8>) {
     (lo, image)
 }
 
-/// Annotate an InsnStart line with raw encoding and disassembly.
-///
-/// # Safety
-/// `guest_base + pc` must point to valid, readable guest memory.
-fn insn_annotation(
+fn insn_annotation_riscv64(
     pc: u64,
     guest_base: *const u8,
     w: &mut dyn Write,
@@ -134,20 +168,33 @@ fn insn_annotation(
 
 /// Translate one TB starting at `pc` and dump its IR.
 fn translate_tb(
+    arch: Arch,
     ir: &mut Context,
     pc: u64,
     guest_base: *const u8,
-    cfg: RiscvCfg,
     max_insns: u32,
     w: &mut impl Write,
 ) -> (u64, DisasJumpType) {
+    match arch {
+        Arch::Riscv64 => translate_tb_riscv64(ir, pc, guest_base, max_insns, w),
+    }
+}
+
+fn translate_tb_riscv64(
+    ir: &mut Context,
+    pc: u64,
+    guest_base: *const u8,
+    max_insns: u32,
+    w: &mut impl Write,
+) -> (u64, DisasJumpType) {
+    let cfg = RiscvCfg::default();
     if ir.nb_globals() == 0 {
         // First TB — register globals via translator_loop.
         let mut d = RiscvDisasContext::new(pc, guest_base, cfg);
         d.base.max_insns = max_insns;
         translator_loop::<RiscvTranslator>(&mut d, ir);
         let gb = guest_base;
-        dump_ops_with(ir, w, |pc, w| insn_annotation(pc, gb, w))
+        dump_ops_with(ir, w, |pc, w| insn_annotation_riscv64(pc, gb, w))
             .expect("write failed");
         (d.base.pc_next, d.base.is_jmp)
     } else {
@@ -176,7 +223,7 @@ fn translate_tb(
         }
         RiscvTranslator::tb_stop(&mut d, ir);
         let gb = guest_base;
-        dump_ops_with(ir, w, |pc, w| insn_annotation(pc, gb, w))
+        dump_ops_with(ir, w, |pc, w| insn_annotation_riscv64(pc, gb, w))
             .expect("write failed");
         (d.base.pc_next, d.base.is_jmp)
     }
@@ -196,6 +243,26 @@ fn main() {
         process::exit(1);
     });
 
+    // Resolve architecture: --arch flag takes priority, otherwise
+    // auto-detect from ELF e_machine.
+    let arch = if let Some(ref name) = args.arch {
+        Arch::from_name(name).unwrap_or_else(|| {
+            eprintln!("unsupported architecture: {name}");
+            process::exit(1);
+        })
+    } else {
+        Arch::from_e_machine(info.e_machine).unwrap_or_else(|| {
+            let em = info.e_machine;
+            eprintln!(
+                "unknown ELF e_machine {em}, \
+                 use --arch to specify"
+            );
+            process::exit(1);
+        })
+    };
+
+    eprintln!("arch: {}", arch.name());
+
     let (base_addr, image) = build_image(&info);
     let image_end = base_addr + image.len() as u64;
     // guest_base: host pointer such that guest_base + vaddr
@@ -203,7 +270,6 @@ fn main() {
     let guest_base = image.as_ptr().wrapping_sub(base_addr as usize);
 
     let start_pc = args.start.unwrap_or(info.entry);
-    let cfg = RiscvCfg::default();
     let max_count = args.count.unwrap_or(usize::MAX);
 
     let mut out: Box<dyn Write> = match &args.output {
@@ -224,10 +290,10 @@ fn main() {
     while pc >= base_addr && pc < image_end && tb_count < max_count {
         writeln!(out, "TB #{tb_count} @ 0x{pc:x}").expect("write failed");
         let (next_pc, _) = translate_tb(
+            arch,
             &mut ir,
             pc,
             guest_base,
-            cfg,
             args.max_insns,
             &mut out,
         );
